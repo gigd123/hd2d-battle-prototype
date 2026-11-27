@@ -265,6 +265,16 @@ static func build_knight() -> Node3D:
 		"ride_idle": [_knight_ride_idle, 1.2, true],
 		"ride_attack_a": [_knight_ride_attack_a, 0.65, false],
 		"ride_attack_b": [_knight_ride_attack_b, 0.65, false],
+		# 第三輪：邊走邊攻擊（下半身走路、上半身揮擊）、長槍刺擊、舉盾、受擊
+		"walk_attack_a": [_knight_walk_attack_a, 0.65, false],
+		"walk_attack_b": [_knight_walk_attack_b, 0.65, false],
+		"thrust": [_knight_thrust, 0.6, false],
+		"walk_thrust": [_knight_walk_thrust, 0.6, false],
+		"block": [_knight_block, 1.2, true],
+		"walk_block": [_knight_walk_block, 0.8, true],
+		"hurt": [_knight_hurt, 0.35, false],
+		"ride_block": [_knight_ride_block, 1.2, true],
+		"ride_thrust": [_knight_ride_thrust, 0.6, false],
 	})
 	return root
 
@@ -312,7 +322,7 @@ static func _knight_idle(t: float) -> Dictionary:
 
 static func _knight_walk(t: float) -> Dictionary:
 	var ph := t * TAU
-	var s := 26.0 * sin(ph)
+	var s := 34.0 * sin(ph)
 	var p := _knight_arms_ready()
 	p["Body"] = [Vector3.ZERO, Vector3.ZERO]
 	p["Hips"] = [Vector3(0, 4.0 * sin(ph), 0), Vector3(0, 0.03 * cos(2.0 * ph) - 0.02, 0)]
@@ -330,7 +340,7 @@ static func _knight_walk(t: float) -> Dictionary:
 
 static func _knight_run(t: float) -> Dictionary:
 	var ph := t * TAU
-	var s := 42.0 * sin(ph)
+	var s := 50.0 * sin(ph)
 	var p := _knight_arms_ready()
 	p["Body"] = [Vector3.ZERO, Vector3.ZERO]
 	p["Hips"] = [Vector3(0, 6.0 * sin(ph), 0), Vector3(0, 0.06 * cos(2.0 * ph) - 0.05, 0)]
@@ -435,6 +445,109 @@ static func _knight_ride_attack_b(t: float) -> Dictionary:
 	return _knight_ride_attack(t, -1.0)
 
 
+## 只取走路姿勢的下半身（腿、髖）
+static func _walk_legs(t: float) -> Dictionary:
+	var w := _knight_walk(t)
+	var out := {}
+	for k in ["Body", "Hips", "LegL", "LegR", "KneeL", "KneeR", "FootL", "FootR"]:
+		out[k] = w[k]
+	return out
+
+
+static func _knight_walk_attack_a(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _keyed(_swing_keys(1.0, 0.0), t))
+
+
+static func _knight_walk_attack_b(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _keyed(_swing_keys(-1.0, 0.0), t))
+
+
+## 長槍刺擊：先收槍蓄力（身體後轉），再整隻手臂往前直刺，最後收回
+static func _thrust_keys(low: float) -> Array:
+	var k := func(spine_x: float, spine_y: float, sh_x: float, sh_y: float, el: float, hand: float) -> Dictionary:
+		return {
+			"Spine": [Vector3(spine_x, spine_y, 0)],
+			"ShoulderR": [Vector3(sh_x + low, sh_y, -4)],
+			"ElbowR": [Vector3(el, 0, 0)],
+			"HandR": [Vector3(hand, 0, 0)],
+			"ShoulderL": [Vector3(-40, 0, 14)],
+			"ElbowL": [Vector3(-70, 0, 0)],
+			"Head": [Vector3(0, -spine_y * 0.5, 0)],
+		}
+	return [
+		[0.0, k.call(2, -10, -45, -10, -80, 85)],
+		[0.3, k.call(-4, -28, -40, -25, -115, 90)],    # 收槍
+		[0.5, k.call(12, 10, -86, 0, -5, 90)],         # 刺出
+		[0.7, k.call(14, 12, -88, 2, 0, 90)],
+		[1.0, k.call(4, 0, -55, -5, -60, 85)],
+	]
+
+
+static func _knight_thrust(t: float) -> Dictionary:
+	var legs := _knight_legs_stand()
+	legs["LegL"] = [Vector3(-22, 0, 4)]
+	legs["LegR"] = [Vector3(14, 0, -4)]
+	legs["KneeL"] = [Vector3(18, 0, 0)]
+	legs["Hips"] = [Vector3(0, 0, 0), Vector3(0, -0.05, 0)]
+	return _merge(legs, _keyed(_thrust_keys(0.0), t))
+
+
+static func _knight_walk_thrust(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _keyed(_thrust_keys(0.0), t))
+
+
+## 舉盾：左前臂橫在胸前讓盾面朝前，右手武器收在身側
+static func _block_arms() -> Dictionary:
+	return {
+		"ShoulderL": [Vector3(-78, -30, 6)],
+		"ElbowL": [Vector3(-70, 0, 0)],
+		"HandL": [Vector3(0, 0, 0)],
+		"ShoulderR": [Vector3(-30, 0, -14)],
+		"ElbowR": [Vector3(-70, 0, 0)],
+		"HandR": [Vector3(30, 0, 0)],
+		"Spine": [Vector3(8, 12, 0)],
+		"Head": [Vector3(4, -8, 0)],
+	}
+
+
+static func _knight_block(t: float) -> Dictionary:
+	var p := _merge(_knight_legs_stand(), _block_arms())
+	p["LegL"] = [Vector3(-14, 0, 5)]
+	p["KneeL"] = [Vector3(14, 0, 0)]
+	p["KneeR"] = [Vector3(12, 0, 0)]
+	p["Hips"] = [Vector3.ZERO, Vector3(0, -0.05 - 0.01 * sin(t * TAU), 0)]
+	return p
+
+
+static func _knight_walk_block(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _block_arms())
+
+
+## 受擊：上身往後仰、雙臂張開、膝蓋一軟，再回到架勢
+static func _knight_hurt(t: float) -> Dictionary:
+	var e := sin(minf(t / 0.35, 1.0) * PI * 0.5) * (1.0 - smoothstep(0.35, 1.0, t))
+	var p := _merge(_knight_legs_stand(), _knight_arms_ready())
+	p["Spine"] = [Vector3(-22.0 * e, 8.0 * e, 0)]
+	p["Head"] = [Vector3(-18.0 * e, 0, 6.0 * e)]
+	p["ShoulderR"] = [Vector3(-12 + 10.0 * e, 0, -6 - 34.0 * e)]
+	p["ShoulderL"] = [Vector3(-28 + 14.0 * e, 0, 10 + 30.0 * e)]
+	p["KneeL"] = [Vector3(6 + 18.0 * e, 0, 0)]
+	p["KneeR"] = [Vector3(6 + 24.0 * e, 0, 0)]
+	p["Hips"] = [Vector3.ZERO, Vector3(0, -0.06 * e, -0.06 * e)]
+	return p
+
+
+static func _knight_ride_block(t: float) -> Dictionary:
+	var p := _merge(_knight_legs_ride(), _block_arms())
+	p["Spine"] = [Vector3(4 + 1.0 * sin(t * TAU), 12, 0)]
+	return p
+
+
+## 馬上長槍：夾在腋下往前平舉（騎槍衝鋒），刺出時再往前送
+static func _knight_ride_thrust(t: float) -> Dictionary:
+	return _merge(_knight_legs_ride(), _keyed(_thrust_keys(10.0), t))
+
+
 # ---------------------------------------------------------------------------
 # 馬
 # ---------------------------------------------------------------------------
@@ -512,7 +625,7 @@ static func _horse_idle(t: float) -> Dictionary:
 
 
 static func _horse_trot(t: float) -> Dictionary:
-	var p := _horse_legs(t, t + 0.5, t + 0.5, t, 24.0, 40.0)
+	var p := _horse_legs(t, t + 0.5, t + 0.5, t, 30.0, 44.0)
 	p["Body"] = [Vector3.ZERO, Vector3(0, 0.035 * cos(2.0 * t * TAU), 0)]
 	p["Neck"] = [Vector3(40 + 3.0 * cos(2.0 * t * TAU), 0, 0)]
 	p["HeadJ"] = [Vector3(60, 0, 0)]
@@ -522,7 +635,7 @@ static func _horse_trot(t: float) -> Dictionary:
 
 static func _horse_gallop(t: float) -> Dictionary:
 	# 旋轉式襲步：四蹄依序落地，身體每步前後擺一次
-	var p := _horse_legs(t, t + 0.12, t + 0.5, t + 0.62, 42.0, 60.0)
+	var p := _horse_legs(t, t + 0.12, t + 0.5, t + 0.62, 50.0, 64.0)
 	var ph := t * TAU
 	p["Body"] = [Vector3(5.0 * sin(ph), 0, 0), Vector3(0, 0.07 * sin(ph + 0.6), 0)]
 	p["Neck"] = [Vector3(48 - 8.0 * sin(ph), 0, 0)]

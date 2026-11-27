@@ -65,7 +65,8 @@ func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 			kind = SoldierArt.Kind.DEAD
 			t = now - bm.dead_time[i]
 		elif anim > 0.0:
-			kind = SoldierArt.Kind.ATTACK
+			# 一邊移動一邊出手：下半身（或馬）繼續走
+			kind = SoldierArt.Kind.WALK_ATTACK if bm.vel[i].length() > 0.8 else SoldierArt.Kind.ATTACK
 			progress = 1.0 - anim / (0.6 if ut == BattleManager.UnitType.ARCHER else 0.45)
 		elif st == BattleManager.State.MOVE:
 			spd = bm.vel[i].length()

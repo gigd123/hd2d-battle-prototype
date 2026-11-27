@@ -23,6 +23,8 @@ var shadow: Decal
 ## 疊加層：圖層名 → Sprite3D（跟主圖層／附掛圖層同幀同位置）
 var main_overlays: Dictionary = {}
 var attach_overlays: Dictionary = {}
+## 被關掉的疊加層名（例：換成長槍時把劍那層藏起來）
+var hidden_layers: Dictionary = {}
 
 ## 最近一次更新的結果（給除錯與命中判定參考用）
 var last_column := 0
@@ -118,7 +120,19 @@ func set_attach_visible(v: bool) -> void:
 	if attach_sprite:
 		attach_sprite.visible = v
 	for k in attach_overlays:
-		(attach_overlays[k] as Sprite3D).visible = v
+		(attach_overlays[k] as Sprite3D).visible = v and not hidden_layers.has(k)
+
+
+## 開關某個疊加層（主圖層與附掛圖層同名的都算）
+func set_layer_hidden(layer_name: String, hidden: bool) -> void:
+	if hidden:
+		hidden_layers[layer_name] = true
+	else:
+		hidden_layers.erase(layer_name)
+	if main_overlays.has(layer_name):
+		(main_overlays[layer_name] as Sprite3D).visible = not hidden
+	if attach_overlays.has(layer_name) and attach_sprite:
+		(attach_overlays[layer_name] as Sprite3D).visible = attach_sprite.visible and not hidden
 
 
 ## world_pos：角色腳底位置；facing：水平朝向；main_row / attach_row：動作列。

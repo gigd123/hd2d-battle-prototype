@@ -54,6 +54,8 @@ func setup(p_player: PlayerController, p_cam: OrbitFollowCamera, p_battle: Battl
 	player.swing_started.connect(_on_swing_started)
 	player.hit_detail.connect(_on_hit)
 	player.damaged.connect(_on_damaged)
+	player.blocked.connect(_on_blocked)
+	player.weapon_stuck.connect(_on_weapon_stuck)
 
 
 func _ready() -> void:
@@ -227,6 +229,32 @@ func _on_damaged(amount: float) -> void:
 		var lbl: Label3D = _numbers[-1][0]
 		lbl.modulate = Color(1.0, 0.2, 0.2)
 		lbl.font_size = 22
+
+
+## 舉盾擋下：金屬撞擊聲、火花、輕微震動（不閃紅、不停頓太久）
+func _on_blocked(point: Vector3) -> void:
+	if cam_rig:
+		cam_rig.add_shake(0.08)
+	_hitstop(0.02)
+	_burst(point, false)
+	_play(PlaceholderAudio.clang(), randf_range(0.75, 0.9), -1.0)
+	_spawn_text(point + Vector3(0, 0.4, 0), "擋", Color(0.7, 0.85, 1.0))
+
+
+## 長槍貼身卡住：悶響、短停頓、「卡住」字樣
+func _on_weapon_stuck(point: Vector3) -> void:
+	if cam_rig:
+		cam_rig.add_shake(0.1)
+	_hitstop(0.06)
+	_play(PlaceholderAudio.thunk(), randf_range(0.6, 0.75), 0.0)
+	_spawn_text(point + Vector3(0, 0.5, 0), "卡住", Color(0.95, 0.6, 0.3))
+
+
+func _spawn_text(at: Vector3, text: String, color: Color) -> void:
+	_spawn_number(at, 1.0, false)
+	var lbl: Label3D = _numbers[-1][0]
+	lbl.text = text
+	lbl.modulate = color
 
 
 func _build_vignette() -> void:

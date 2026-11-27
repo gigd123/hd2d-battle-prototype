@@ -28,7 +28,8 @@ enum UnitType { INFANTRY, ARCHER, CAVALRY }
 const U_WALK := [3.0, 3.0, 5.0]
 const U_RUN := [4.2, 4.0, 9.5]
 const U_HP := [100.0, 70.0, 150.0]
-const U_REACH := [1.5, 1.4, 2.0]
+const U_REACH := [2.1, 1.4, 2.0]      # 步兵拿長槍，比拿劍的弓兵搆得遠
+const SPEAR_MIN_DIST := 1.0           # 長槍步兵：目標比這更近 → 往後退一點拉開距離，傷害減半
 const U_DMG_MIN := [9.0, 5.0, 11.0]
 const U_DMG_MAX := [14.0, 8.0, 16.0]
 const U_RADIUS := [0.38, 0.38, 0.75]
@@ -687,6 +688,8 @@ func _move_and_fight(delta: float) -> void:
 			elif d > reach * 0.85:
 				desired = face * (run if (d > 6.0 or ut == UnitType.CAVALRY) else walk)
 			else:
+				if ut == UnitType.INFANTRY and d < SPEAR_MIN_DIST:
+					desired = -face * walk * 0.6
 				if ut == UnitType.CAVALRY:
 					engage_t[i] += delta
 					if engage_t[i] > CAV_MELEE_TIME:
@@ -719,6 +722,8 @@ func _move_and_fight(delta: float) -> void:
 				var reach2: float = U_REACH[ut] + 0.4 + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
 				if Vector2(tp2.x - p.x, tp2.z - p.z).length() <= reach2 and rng.randf() < 0.75:
 					var dmg := rng.randf_range(U_DMG_MIN[ut], U_DMG_MAX[ut])
+					if ut == UnitType.INFANTRY and Vector2(tp2.x - p.x, tp2.z - p.z).length() < SPEAR_MIN_DIST:
+						dmg *= 0.5
 					if tg == TARGET_PLAYER:
 						player.take_damage(dmg, p)
 					else:
