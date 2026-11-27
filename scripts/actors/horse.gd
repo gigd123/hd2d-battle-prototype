@@ -16,6 +16,11 @@ extends CharacterBody3D
 @export var sharp_turn_angle := 1.6    # 超過這個角度差就減速（弧度）
 @export var crowd_slowdown := 0.12     # 每個擋路士兵造成的減速比例
 @export var gravity := 25.0
+# 「跟步行一樣」的操作（騎手用 set_drive_look）：馬頭轉向滑鼠方向，W 前進、S 後退
+@export var back_speed := 2.6          # 倒退（勒馬後退）的最高速度
+@export var side_speed := 2.0          # 低速時 A/D 的側步速度（馬只能慢慢橫移）
+@export var side_max_speed := 3.0      # 前進速度超過這個值就不能側步，A/D 改成讓馬頭偏一點
+@export var steer_bias_deg := 35.0     # 前進中按 A/D，馬頭相對滑鼠方向偏幾度
 
 var heading := 0.0                     # 朝向（yaw），forward = (sin, 0, cos)
 var speed := 0.0
@@ -28,6 +33,10 @@ var _baked: BakedSpriteSet = null
 
 var _desired := Vector3.ZERO
 var _sprint := false
+var _look_mode := false
+var _look := Vector3.ZERO              # 滑鼠（相機）水平前方
+var _input := Vector2.ZERO             # x = 右，y = 前
+var side := 0.0                        # 目前側步速度（正 = 往右）
 var _stride := 0.0
 var _prev_pos := Vector3.ZERO
 var _cur_pos := Vector3.ZERO
@@ -83,6 +92,24 @@ func forward() -> Vector3:
 func set_drive(desired: Vector3, sprint: bool) -> void:
 	_desired = desired
 	_sprint = sprint
+	_look_mode = false
+
+
+## 跟步行一樣的操作：look = 滑鼠方向（相機水平前方），input = WASD（x 右、y 前）。
+## 馬不能像人一樣自由平移，所以：
+## - 馬頭會以有限的轉向速度轉向滑鼠方向（站著不動時原地轉）
+## - W 前進、S 慢慢倒退
+## - A/D：低速時慢慢側步；前進中改成讓馬頭往那邊偏，走出斜線
+func set_drive_look(look: Vector3, input: Vector2, sprint: bool) -> void:
+	_look = look
+	_input = input
+	_sprint = sprint
+	_look_mode = true
+
+
+func right() -> Vector3:
+	var f := forward()
+	return Vector3(-f.z, 0.0, f.x)
 
 
 func teleport(p: Vector3, new_heading: float) -> void:
@@ -96,7 +123,27 @@ func teleport(p: Vector3, new_heading: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	var target_speed := 0.0
-	if rider != null and _desired.length() > 0.1:
+	var target_side := 0.0
+	if rider != null and _look_mode:
+		var d := _look
+		if _input.y > 0.1:
+			d = _look.rotated(Vector3.UP, -_input.x * deg_to_rad(steer_bias_deg))
+		var diff := wrapf(atan2(d.x, d.z) - heading, -PI, PI)
+		var t := clampf(absf(speed) / gallop_speed, 0.0, 1.0)
+		var tr := lerpf(turn_rate_slow, turn_rate_fast, t)
+		heading = wrapf(heading + clampf(diff, -tr * delta, tr * delta), -PI, PI)
+		if _input.y > 0.1:
+			target_speed = (gallop_speed if _sprint else trot_speed) * minf(_input.y, 1.0)
+			if absf(diff) > sharp_turn_angle:
+				target_speed = minf(target_speed, trot_speed * 0.4)
+		elif _input.y < -0.1:
+			target_speed = -back_speed * minf(-_input.y, 1.0)
+		if absf(_input.x) > 0.1 and _input.y <= 0.1 and absf(speed) < side_max_speed:
+			target_side = side_speed * signf(_input.x)
+		if terrain and target_speed > 0.0:
+			var hf0 := forward()
+			target_speed *= terrain.move_factor(global_position.x, global_position.z, hf0.x, hf0.z)
+	elif rider != null and _desired.length() > 0.1:
 		var desired_heading := atan2(_desired.x, _desired.z)
 		var diff := wrapf(desired_heading - heading, -PI, PI)
 		var t := clampf(speed / gallop_speed, 0.0, 1.0)
@@ -109,8 +156,9 @@ func _physics_process(delta: float) -> void:
 		if terrain:
 			var hf := forward()
 			target_speed *= terrain.move_factor(global_position.x, global_position.z, hf.x, hf.z)
-	var rate := accel if target_speed > speed else brake
+	var rate := accel if absf(target_speed) > absf(speed) and target_speed * speed >= 0.0 else brake
 	speed = move_toward(speed, target_speed, rate * delta)
+	side = move_toward(side, target_side, (accel if absf(target_side) > absf(side) else brake) * delta)
 
 	# 人群阻擋：由戰場管理器回報前方有幾個士兵
 	if battle != null and speed > 0.5:
@@ -119,8 +167,9 @@ func _physics_process(delta: float) -> void:
 			speed *= maxf(0.0, 1.0 - crowd_slowdown * blockers * delta * 10.0)
 
 	var f := forward()
-	velocity.x = f.x * speed
-	velocity.z = f.z * speed
+	var r := right()
+	velocity.x = f.x * speed + r.x * side
+	velocity.z = f.z * speed + r.z * side
 	if is_on_floor():
 		velocity.y = -1.0
 	else:
@@ -129,11 +178,14 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	if is_on_wall():
 		var real := get_real_velocity()
-		var real_fwd := maxf(0.0, real.x * f.x + real.z * f.z)
-		speed = minf(speed, real_fwd + accel * delta)
+		var real_fwd := real.x * f.x + real.z * f.z
+		if speed > 0.0:
+			speed = minf(speed, maxf(0.0, real_fwd) + accel * delta)
+		elif speed < 0.0:
+			speed = maxf(speed, minf(0.0, real_fwd) - accel * delta)
 	if terrain:
 		global_position = terrain.clamp_to_map(global_position, 3.0)
-	_stride += speed * delta
+	_stride += (absf(speed) + absf(side)) * delta
 	_prev_pos = _cur_pos
 	_cur_pos = global_position
 
@@ -156,12 +208,16 @@ func visual_position() -> Vector3:
 
 func anim_row() -> int:
 	if _baked:
-		if speed < 0.6:
+		var moving := absf(speed) + absf(side)
+		if moving < 0.6:
 			return _baked.row_at_time("idle", Time.get_ticks_msec() / 1000.0)
+		if speed < 0.6:
+			# 倒退或側步：小跑動畫倒著／慢慢播
+			return _baked.row_at_progress("trot", fmod(-_stride / 1.6 if speed < 0.0 else _stride / 1.6, 1.0))
 		if speed < (trot_speed + gallop_speed) * 0.5:
 			return _baked.row_at_progress("trot", fmod(_stride / 2.8, 1.0))
 		return _baked.row_at_progress("gallop", fmod(_stride / 4.4, 1.0))
-	if speed < 0.6:
+	if absf(speed) + absf(side) < 0.6:
 		return 0
 	return int(_stride / 1.4) % 2
 

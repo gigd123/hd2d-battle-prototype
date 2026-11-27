@@ -246,7 +246,7 @@ func body_center() -> Vector3:
 
 func move_velocity() -> Vector3:
 	if mounted and horse:
-		return horse.forward() * horse.speed
+		return horse.forward() * horse.speed + horse.right() * horse.side
 	return Vector3(velocity.x, 0, velocity.z)
 
 
@@ -358,8 +358,11 @@ func _physics_process(delta: float) -> void:
 	if _mount_t >= 0.0:
 		_update_mount_transition(delta)
 	elif mounted:
-		# 騎馬：馬不能平移，W 往鏡頭方向、A/D 轉彎（馬會轉向輸入方向），朝向 = 馬頭方向
-		horse.set_drive(dir, sprint)
+		# 騎馬：跟步行一樣由滑鼠決定方向、W 前進 S 後退（細節見 Horse.set_drive_look），朝向 = 馬頭方向
+		if cam_rig:
+			horse.set_drive_look(cam_rig.flat_forward(), input, sprint)
+		else:
+			horse.set_drive(dir, sprint)
 		global_position = horse.global_position
 		facing = horse.forward()
 	else:

@@ -193,10 +193,9 @@ func apply_postfx() -> void:
 
 
 func _build_environment() -> void:
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.38, 0.55, 0.80)
-	sky_mat.sky_horizon_color = Color(0.80, 0.78, 0.72)
-	sky_mat.ground_horizon_color = Color(0.70, 0.66, 0.58)
+	# 自訂天空（漸層＋太陽＋飄動的像素風雲），鏡頭往上看時才不會一片空
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = preload("res://shaders/sky_clouds.gdshader")
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	var env := Environment.new()
@@ -232,10 +231,11 @@ func _build_environment() -> void:
 func _apply_terrain_environment() -> void:
 	var e := terrain.environment_settings()
 	var env := world_env.environment
-	var sky_mat := env.sky.sky_material as ProceduralSkyMaterial
-	sky_mat.sky_top_color = e["sky_top"]
-	sky_mat.sky_horizon_color = e["horizon"]
-	sky_mat.ground_horizon_color = (e["horizon"] as Color).darkened(0.12)
+	var sky_mat := env.sky.sky_material as ShaderMaterial
+	sky_mat.set_shader_parameter("sky_top", e["sky_top"])
+	sky_mat.set_shader_parameter("sky_horizon", e["horizon"])
+	sky_mat.set_shader_parameter("ground_color", (e["horizon"] as Color).darkened(0.2))
+	sky_mat.set_shader_parameter("cloud_cover", 0.6 if terrain.terrain_type == BattleTerrain.Type.SNOW else 0.45)
 	env.fog_light_color = e["fog"]
 	env.fog_density = e["fog_density"]
 	env.ambient_light_energy = e["ambient"]

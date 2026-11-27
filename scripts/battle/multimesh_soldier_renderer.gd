@@ -99,6 +99,6 @@ func _draw_soldier(i: int, p: Vector3, frame: int, flip: bool, flash: float, dar
 
 func _end_frame() -> void:
 	for k in _mms.size():
-		_mats[k].set_shader_parameter("full_billboard", GameConfig.full_billboard)
+		_mats[k].set_shader_parameter("full_billboard", GameConfig.use_full_billboard())
 		if _mms[k].instance_count > 0:
 			_mms[k].buffer = _bufs[k]

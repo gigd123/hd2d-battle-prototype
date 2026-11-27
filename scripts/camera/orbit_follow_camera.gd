@@ -14,8 +14,9 @@ extends Node3D
 @export var min_distance := 5.0
 @export var max_distance := 45.0
 @export var pitch_deg := 35.0
-@export var min_pitch_deg := 12.0
-@export var max_pitch_deg := 70.0
+@export var min_pitch_deg := -60.0     # 負值 = 鏡頭壓到地面附近往上看（看天空）
+@export var max_pitch_deg := 88.0      # 接近正上方俯視（90 度會讓 look_at 失去方向）
+@export var low_orbit_deg := 4.0       # 俯角低於這個值時，鏡頭不再往下繞（會鑽地），改成原地抬頭
 @export var mouse_sensitivity := 0.0035
 @export var follow_smooth := 10.0
 @export var fov := 38.0
@@ -86,7 +87,14 @@ func _process(delta: float) -> void:
 		goal = target.call("visual_position") if target.has_method("visual_position") else target.global_position
 	_focus = _focus.lerp(goal, 1.0 - exp(-(1.2 if spectating else follow_smooth) * delta))
 	var look_at_point := _focus + Vector3(0, 1.4, 0)
-	var pitch := deg_to_rad(pitch_deg)
+	# 俯角低於 low_orbit_deg：鏡頭位置停在低角度，多出來的角度用來「抬頭」，不會鑽進地面
+	var pitch := deg_to_rad(maxf(pitch_deg, low_orbit_deg))
+	var look_up := deg_to_rad(maxf(0.0, low_orbit_deg - pitch_deg))
+	# 接近正上方時角色改成完全面向相機（有遲滯，避免在門檻附近來回切換）
+	if GameConfig.auto_full_billboard:
+		GameConfig.auto_full_billboard = pitch_deg > 68.0
+	else:
+		GameConfig.auto_full_billboard = pitch_deg > 72.0
 	var offset := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * distance
 	var cam_pos := look_at_point + offset
 	# 不鑽進地形：相機至少高於地面 1 公尺
@@ -103,6 +111,8 @@ func _process(delta: float) -> void:
 		shake = maxf(0.0, shake - real_dt * 2.5)
 	camera.global_position = cam_pos + jitter
 	camera.look_at(look_at_point + jitter * 0.5, Vector3.UP)
+	if look_up > 0.0:
+		camera.rotate_object_local(Vector3.RIGHT, look_up)
 	# 景深焦點跟著距離走（移軸感：焦點外的前景與遠景模糊）
 	_attrs.dof_blur_far_distance = distance + 12.0
 	_attrs.dof_blur_far_transition = distance * 1.5
