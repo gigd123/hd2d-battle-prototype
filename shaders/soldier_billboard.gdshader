@@ -8,6 +8,8 @@ uniform sampler2D atlas : source_color, filter_nearest;
 uniform vec2 grid = vec2(8.0, 4.0);
 // false = Y 軸 Billboard（直立紙片，畫面邊緣會有透視傾斜）；true = 完全面向相機（畫面上永遠直立）
 uniform bool full_billboard = false;
+// 預渲染圖：陣營色遮罩編在透明度（約 0.75 = 這個像素乘上陣營色，保留原本明暗）
+uniform bool alpha_team_mask = false;
 
 varying vec4 v_color;
 varying vec2 v_fx;
@@ -41,8 +43,14 @@ void fragment() {
 	if (tex.a < 0.5) {
 		discard;
 	}
-	float team_mask = step(0.99, min(min(tex.r, tex.g), tex.b));
-	vec3 col = mix(tex.rgb, v_color.rgb, team_mask);
+	vec3 col;
+	if (alpha_team_mask) {
+		float team = step(tex.a, 0.9);
+		col = mix(tex.rgb, tex.rgb * v_color.rgb, team);
+	} else {
+		float team_mask = step(0.99, min(min(tex.r, tex.g), tex.b));
+		col = mix(tex.rgb, v_color.rgb, team_mask);
+	}
 	col = mix(col, vec3(1.6), v_fx.x);
 	col *= 1.0 - v_fx.y * 0.45;
 	ALBEDO = col;

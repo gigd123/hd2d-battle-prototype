@@ -13,8 +13,15 @@ var _arrow_mmi: MultiMeshInstance3D
 var _n := 0
 
 
+## 每個兵種的圖集（佔位圖或預渲染圖），依 GameConfig.art_mode 決定
+var _arts: Array[SoldierArt] = []
+
+
 func setup(bm: BattleManager) -> void:
 	_n = bm.count
+	_arts.clear()
+	for ut in 3:
+		_arts.append(SoldierArt.for_unit(ut))
 	_create(bm)
 	_setup_shadows(_n)
 	_setup_arrows()
@@ -48,15 +55,23 @@ func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 		var dead := st == BattleManager.State.DEAD
 		var visible_now := not dead or (now - bm.dead_time[i]) < bm.corpse_time
 		var dir := DirectionUtil.resolve_with(bm.facing[i], cam_basis, dir_count, mirror)
-		var row := PlaceholderArt.ROW_IDLE
+		var art: SoldierArt = _arts[ut]
 		var anim := bm.atk_anim[i]
+		var kind := SoldierArt.Kind.IDLE
+		var t := now + i * 0.37
+		var progress := 0.0
+		var spd := 0.0
 		if dead:
-			row = PlaceholderArt.ROW_DEAD
-		elif anim > 0.0 and (anim < 0.25 or ut == BattleManager.UnitType.ARCHER):
-			row = PlaceholderArt.ROW_ATTACK
+			kind = SoldierArt.Kind.DEAD
+			t = now - bm.dead_time[i]
+		elif anim > 0.0:
+			kind = SoldierArt.Kind.ATTACK
+			progress = 1.0 - anim / (0.6 if ut == BattleManager.UnitType.ARCHER else 0.45)
 		elif st == BattleManager.State.MOVE:
-			var rate := 9.0 if ut == BattleManager.UnitType.CAVALRY else 5.0
-			row = PlaceholderArt.ROW_WALK if int(now * rate + i * 0.37) % 2 == 0 else PlaceholderArt.ROW_IDLE
+			spd = bm.vel[i].length()
+			var run_at := 7.0 if ut == BattleManager.UnitType.CAVALRY else 3.6
+			kind = SoldierArt.Kind.RUN if spd > run_at else SoldierArt.Kind.WALK
+		var row := art.row_for(kind, t, progress, spd)
 		var flash := 1.0 if (bm.hit_flash[i] > 0.0 and not dead) else 0.0
 		_draw_soldier(i, p, row * 8 + dir.x, dir.y == 1, flash, 1.0 if dead else 0.0, visible_now)
 		# 腳下陰影（騎兵較大）

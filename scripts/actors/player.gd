@@ -36,6 +36,8 @@ var cam_rig: OrbitFollowCamera
 var terrain: BattleTerrain
 var battle: Node = null               # BattleManager（階段 2 起）
 var visual: LayeredActorVisual
+const PLAYER_TINT := Color(0.25, 0.45, 0.85)
+var _baked: BakedSpriteSet = null     # 預渲染圖集（null = 用佔位圖）
 var spawn_point := Vector3.ZERO
 
 var mounted := false
@@ -75,12 +77,54 @@ func _ready() -> void:
 	_shape.shape = cap
 	_shape.position = Vector3(0, 0.9, 0)     # 原點在腳底
 	add_child(_shape)
-	visual = LayeredActorVisual.new()
-	visual.name = "PlayerVisual"
-	visual.setup_main(PlaceholderArt.unit_atlas_tinted(PlaceholderArt.Unit.INFANTRY, Color(0.25, 0.45, 0.85)), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
-	add_child(visual)
+	_build_visual()
+	GameConfig.art_mode_changed.connect(_build_visual)
 	_prev_pos = global_position
 	_cur_pos = global_position
+
+
+## 建立（或重建）畫面：有預渲染圖就用它（身體＋劍兩層），否則用佔位圖
+func _build_visual() -> void:
+	if visual:
+		visual.queue_free()
+	visual = LayeredActorVisual.new()
+	visual.name = "PlayerVisual"
+	_baked = GameConfig.baked_set("knight")
+	if _baked:
+		visual.setup_main_baked(_baked, ["body", "sword"], PLAYER_TINT)
+	else:
+		visual.setup_main(PlaceholderArt.unit_atlas_tinted(PlaceholderArt.Unit.INFANTRY, PLAYER_TINT), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
+	add_child(visual)
+
+
+## 揮擊進度 0..1（含蓄力與收招），給預渲染動畫選幀：蓄力 = 前 1/3，揮出 = 中段，收招 = 最後 1/6
+func attack_anim_progress() -> float:
+	match attack_phase:
+		AttackPhase.WINDUP:
+			return (1.0 - attack_timer / windup_time) / 3.0
+		AttackPhase.SWING:
+			return 1.0 / 3.0 + (1.0 - attack_timer / swing_time) * 0.5
+		AttackPhase.RECOVER:
+			return 5.0 / 6.0 + (1.0 - attack_timer / recover_time) / 6.0
+	return 0.0
+
+
+func _attack_action(on_horse: bool) -> String:
+	return ("ride_attack" if on_horse else "attack") + ("_a" if _swing_dir > 0.0 else "_b")
+
+
+## 預渲染圖：步行時選哪一列
+func _baked_foot_row() -> int:
+	if dead:
+		return _baked.row_at_time("death", 4.0 - _respawn_timer)
+	if attack_phase != AttackPhase.NONE:
+		return _baked.row_at_progress(_attack_action(false), attack_anim_progress())
+	var spd := Vector2(velocity.x, velocity.z).length()
+	if spd > 0.3:
+		if spd > (walk_speed + run_speed) * 0.5:
+			return _baked.row_at_progress("run", fmod(_walk_phase / 2.6, 1.0))
+		return _baked.row_at_progress("walk", fmod(_walk_phase / 1.5, 1.0))
+	return _baked.row_at_time("idle", Time.get_ticks_msec() / 1000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +165,10 @@ func take_damage(amount: float) -> void:
 
 
 func rider_anim_row() -> int:
+	if _baked:
+		if attack_phase != AttackPhase.NONE:
+			return _baked.row_at_progress(_attack_action(true), attack_anim_progress())
+		return _baked.row_at_time("ride_idle", Time.get_ticks_msec() / 1000.0)
 	match attack_phase:
 		AttackPhase.WINDUP:
 			return PlaceholderArt.RIDER_WINDUP
@@ -385,6 +433,9 @@ func _process(_delta: float) -> void:
 	var show_foot := not is_seated()
 	visual.visible = show_foot
 	if not show_foot:
+		return
+	if _baked:
+		visual.update_visual(visual_position(), facing, cam, _baked_foot_row())
 		return
 	var row := PlaceholderArt.ROW_IDLE
 	if dead:

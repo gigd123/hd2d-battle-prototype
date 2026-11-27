@@ -1,0 +1,23 @@
+{
+  "name": "horse",
+  "source": "builtin:horse",
+  "frame_size": [96, 80],
+  "pixel_size": 0.045,
+  "pitch_deg": 30,
+  "supersample": 4,
+  "bottom_margin": 16,
+  "forward": "+Z",
+  "outline": true,
+  "color_levels": 24,
+  "layers": [
+    {"name": "horse", "include": ["*"], "team": ["*Team*"]}
+  ],
+  "anchors": {
+    "saddle": "Saddle"
+  },
+  "actions": [
+    {"name": "idle", "frames": 2, "fps": 2, "loop": true},
+    {"name": "trot", "frames": 6, "fps": 9, "loop": true},
+    {"name": "gallop", "frames": 6, "fps": 11, "loop": true}
+  ]
+}
