@@ -28,6 +28,8 @@ var art_mode: int = ArtMode.BAKED
 ## Billboard 方式：false = Y 軸（直立紙片，報告建議的起點）；true = 完全面向相機。
 ## 相機俯角大時，Y 軸 Billboard 在畫面邊緣會有透視傾斜；兩種都保留，F6 切換比較。
 var full_billboard := false
+## 相機接近正上方俯視時（OrbitFollowCamera 設定），Y 軸紙片會變成一條線，暫時自動改成完全面向相機
+var auto_full_billboard := false
 ## 後製效果（景深、泛光、SSAO、霧）。壓力測試可關閉以比較。
 var postfx_enabled := true
 ## 固定亂數種子：同一種子重跑，戰場生成與 AI 隨機值一致（便於比較）。
@@ -125,7 +127,7 @@ func art_mode_name() -> String:
 
 ## 目前相機下 Y 軸 Billboard 角色要拉高的倍率（腳底不動）
 func billboard_stretch(cam: Camera3D) -> float:
-	if full_billboard or cam == null or pitch_compensation <= 0.0:
+	if use_full_billboard() or cam == null or pitch_compensation <= 0.0:
 		return 1.0
 	var f := -cam.global_basis.z
 	var cos_p := Vector2(f.x, f.z).length()
@@ -133,7 +135,11 @@ func billboard_stretch(cam: Camera3D) -> float:
 
 
 func billboard_mode() -> BaseMaterial3D.BillboardMode:
-	return BaseMaterial3D.BILLBOARD_ENABLED if full_billboard else BaseMaterial3D.BILLBOARD_FIXED_Y
+	return BaseMaterial3D.BILLBOARD_ENABLED if use_full_billboard() else BaseMaterial3D.BILLBOARD_FIXED_Y
+
+
+func use_full_billboard() -> bool:
+	return full_billboard or auto_full_billboard
 
 
 func backend_name() -> String:

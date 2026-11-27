@@ -171,8 +171,8 @@ func update_visual(world_pos: Vector3, facing: Vector3, cam: Camera3D, main_row:
 		var c := attach_anchors.to_offset(attach_anchors.get_point(child_point, dir.x, attach_row), last_flip)
 		var layer := main_anchors.layer_for(dir.x)
 		# 錨點的「上」方向要跟 Billboard 方式一致，騎士才會黏在鞍上
-		var up := cam_basis.y if GameConfig.full_billboard else Vector3.UP
-		var right := cam_basis.x if GameConfig.full_billboard else cam_right
+		var up := cam_basis.y if GameConfig.use_full_billboard() else Vector3.UP
+		var right := cam_basis.x if GameConfig.use_full_billboard() else cam_right
 		last_attach_origin = world_pos + right * p.x + up * p.y
 		last_attach_origin = world_pos + right * p.x + up * p.y * st
 		var pos := world_pos + right * (p.x - c.x) + up * (p.y - c.y) * st + to_cam * (LAYER_GAP * layer)
