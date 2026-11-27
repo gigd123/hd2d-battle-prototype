@@ -77,8 +77,7 @@ func _ready() -> void:
 	add_child(_shape)
 	visual = LayeredActorVisual.new()
 	visual.name = "PlayerVisual"
-	visual.setup_main(PlaceholderArt.human_atlas(), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
-	visual.main_sprite.modulate = Color(0.45, 0.65, 1.0)
+	visual.setup_main(PlaceholderArt.unit_atlas_tinted(PlaceholderArt.Unit.INFANTRY, Color(0.25, 0.45, 0.85)), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
 	add_child(visual)
 	_prev_pos = global_position
 	_cur_pos = global_position

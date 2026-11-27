@@ -15,9 +15,41 @@ signal battle_finished(winner_team: int)
 ## 以下訊號只給畫面／音效回饋用
 signal soldier_struck(point: Vector3, landed: bool)          # 士兵之間出手（命中或被擋）
 signal trampled(point: Vector3, speed: float, killed: bool)   # 玩家騎馬撞上敵兵
+signal arrow_fired(point: Vector3)
+signal arrow_hit(point: Vector3, on_unit: bool)
+signal cavalry_impact(point: Vector3, speed: float)            # 騎兵衝撞敵兵
 
 enum State { IDLE, MOVE, ENGAGE, DEAD }
 enum Order { HOLD, FOLLOW, CHARGE }
+## 兵種（與 PlaceholderArt.Unit 相同順序）
+enum UnitType { INFANTRY, ARCHER, CAVALRY }
+
+# --- 兵種數值表（索引 = UnitType）。原型暫定值，待遊玩調整 ---
+const U_WALK := [3.0, 3.0, 5.0]
+const U_RUN := [4.2, 4.0, 9.5]
+const U_HP := [100.0, 70.0, 150.0]
+const U_REACH := [1.5, 1.4, 2.0]
+const U_DMG_MIN := [9.0, 5.0, 11.0]
+const U_DMG_MAX := [14.0, 8.0, 16.0]
+const U_RADIUS := [0.38, 0.38, 0.75]
+const U_HEIGHT := [1.8, 1.8, 2.5]
+const U_SPACING := [1.4, 1.4, 2.4]       # 隊形間距
+const U_NAMES := ["步兵", "弓兵", "騎兵"]
+
+# 弓兵
+const ARCHER_RANGE := 42.0
+const ARCHER_MIN_RANGE := 6.0
+const ARROW_GRAVITY := 12.0
+const ARROW_SPEED := 24.0              # 用來估算飛行時間（距離 / 速度）
+const ARROW_DAMAGE_MIN := 10.0
+const ARROW_DAMAGE_MAX := 15.0
+const ARROW_DAMAGE_PLAYER := 8.0
+const MAX_ARROWS := 384
+const ARROW_STUCK_TIME := 4.0
+# 騎兵
+const CAV_CHARGE_SPEED := 6.0          # 超過此速度撞到敵兵算衝撞
+const CAV_MELEE_TIME := 4.0            # 纏鬥這麼久就脫離、跑遠再衝
+const CAV_DISENGAGE_TIME := 2.2
 
 const TARGET_PLAYER := -2
 const NO_TARGET := -1
@@ -62,6 +94,23 @@ var hit_flash := PackedFloat32Array()
 var dead_time := PackedFloat32Array()
 var attackers := PackedInt32Array()     # 每個目標目前被幾人鎖定（每步重算）
 var trample_cd := PackedFloat32Array()  # 被馬撞後的冷卻（避免同一人每步都被撞）
+var utype := PackedByteArray()          # 兵種
+var rad := PackedFloat32Array()         # 碰撞半徑（依兵種）
+var engage_t := PackedFloat32Array()    # 騎兵：已纏鬥秒數
+var disengage_t := PackedFloat32Array() # 騎兵：>0 時正在脫離（往前跑開）
+
+# --- 箭矢（固定容量環狀緩衝）---
+var arrow_pos := PackedVector3Array()
+var arrow_vel := PackedVector3Array()
+var arrow_team := PackedByteArray()
+var arrow_state := PackedByteArray()    # 0 無、1 飛行中、2 插在地上
+var arrow_life := PackedFloat32Array()
+var _arrow_next := 0
+var arrows_in_flight := 0
+
+## 編成比例（每方）：其餘為步兵
+@export var archer_ratio := 0.25
+@export var cavalry_ratio := 0.15
 
 # --- 小隊資料 ---
 var squad_count := 0
@@ -71,6 +120,7 @@ var squad_anchor := PackedVector3Array()
 var squad_facing := PackedVector3Array()
 var squad_timer := PackedFloat32Array()
 var squad_alive := PackedInt32Array()
+var squad_type := PackedByteArray()
 
 # --- 軍隊 ---
 var alive_count := PackedInt32Array([0, 0])
@@ -100,6 +150,7 @@ var _cell_next := PackedInt32Array()
 var t_grid := 0
 var t_think := 0
 var t_move := 0
+var t_arrows := 0
 var t_total := 0
 var t_render := 0
 var think_calls := 0
@@ -125,28 +176,76 @@ func set_renderer(r: SoldierRenderer) -> void:
 # ---------------------------------------------------------------------------
 # 生成
 # ---------------------------------------------------------------------------
-## 雙方各 per_team 人，以 squad_size 人為一隊排成橫列。
+## 雙方各 per_team 人，以 squad_size 人為一隊。
+## 編成：步兵小隊在前排、弓兵小隊在步兵後方、騎兵小隊在兩翼。
 func spawn_armies(per_team: int, center := Vector3.ZERO, gap := 36.0) -> void:
 	_clear()
+	_reset_arrows()
 	for t in 2:
 		var sign_x := -1.0 if t == 0 else 1.0
 		var fwd := Vector3(-sign_x, 0, 0)
 		var n_squads := int(ceil(float(per_team) / squad_size))
-		var cols := mini(n_squads, 6)
-		var squad_w := 5 * 1.4 + 2.5
+		var n_cav := roundi(n_squads * cavalry_ratio)
+		var n_arc := roundi(n_squads * archer_ratio)
+		if n_squads >= 4:
+			n_cav = maxi(n_cav, 1)
+		if n_squads >= 3:
+			n_arc = maxi(n_arc, 1)
+		var n_inf := maxi(n_squads - n_cav - n_arc, 1)
+		n_arc = mini(n_arc, n_squads - n_inf)
+		n_cav = n_squads - n_inf - n_arc
+		var types: Array[int] = []
+		for k in n_inf:
+			types.append(UnitType.INFANTRY)
+		for k in n_arc:
+			types.append(UnitType.ARCHER)
+		for k in n_cav:
+			types.append(UnitType.CAVALRY)
 		var remaining := per_team
-		for s in n_squads:
-			var c := s % cols
-			var r := s / cols
-			var lateral := (c - (cols - 1) * 0.5) * squad_w
-			var anchor := center + Vector3(sign_x * (gap * 0.5 + r * 5.0), 0, lateral)
-			var sq := _add_squad(t, anchor, fwd)
+		var inf_cols := mini(n_inf, 6)
+		var line_w := inf_cols * 9.5
+		var idx := {UnitType.INFANTRY: 0, UnitType.ARCHER: 0, UnitType.CAVALRY: 0}
+		for s_i in types.size():
+			var ut: int = types[s_i]
+			var k: int = idx[ut]
+			idx[ut] = k + 1
+			var depth := 0.0
+			var lateral := 0.0
+			match ut:
+				UnitType.INFANTRY:
+					lateral = (k % inf_cols - (inf_cols - 1) * 0.5) * 9.5
+					depth = (k / inf_cols) * 5.0
+				UnitType.ARCHER:
+					var ac := mini(n_arc, 6)
+					lateral = (k % ac - (ac - 1) * 0.5) * 9.5
+					depth = ceil(float(n_inf) / inf_cols) * 5.0 + 3.0 + (k / ac) * 5.0
+				UnitType.CAVALRY:
+					var side := -1.0 if k % 2 == 0 else 1.0
+					lateral = side * (line_w * 0.5 + 8.0 + (k / 2) * 13.0)
+					depth = 2.0
+			var anchor := center + Vector3(sign_x * (gap * 0.5 + depth), 0, lateral)
+			var sq := _add_squad(t, anchor, fwd, ut)
 			var members := mini(squad_size, remaining)
 			remaining -= members
-			for k in members:
-				_add_soldier(t, sq, k)
+			for m in members:
+				_add_soldier(t, sq, m)
 	if renderer:
 		renderer.setup(self)
+
+
+func _reset_arrows() -> void:
+	arrow_pos = PackedVector3Array()
+	arrow_vel = PackedVector3Array()
+	arrow_team = PackedByteArray()
+	arrow_state = PackedByteArray()
+	arrow_life = PackedFloat32Array()
+	arrow_pos.resize(MAX_ARROWS)
+	arrow_vel.resize(MAX_ARROWS)
+	arrow_team.resize(MAX_ARROWS)
+	arrow_state.resize(MAX_ARROWS)
+	arrow_life.resize(MAX_ARROWS)
+	_arrow_next = 0
+	arrows_in_flight = 0
 
 
 func _clear() -> void:
@@ -172,6 +271,11 @@ func _clear() -> void:
 	dead_time = PackedFloat32Array()
 	attackers = PackedInt32Array()
 	trample_cd = PackedFloat32Array()
+	utype = PackedByteArray()
+	rad = PackedFloat32Array()
+	engage_t = PackedFloat32Array()
+	disengage_t = PackedFloat32Array()
+	squad_type = PackedByteArray()
 	squad_team = PackedByteArray()
 	squad_order = PackedByteArray()
 	squad_anchor = PackedVector3Array()
@@ -187,8 +291,9 @@ func _clear() -> void:
 	_army_timer = 0.0
 
 
-func _add_squad(t: int, anchor: Vector3, fwd: Vector3) -> int:
+func _add_squad(t: int, anchor: Vector3, fwd: Vector3, ut: int = UnitType.INFANTRY) -> int:
 	squad_team.append(t)
+	squad_type.append(ut)
 	squad_order.append(Order.CHARGE if auto_charge_both else Order.HOLD)
 	squad_anchor.append(anchor)
 	squad_facing.append(fwd)
@@ -205,10 +310,15 @@ func _add_soldier(t: int, sq: int, k: int) -> void:
 	prev_pos.append(p)
 	vel.append(Vector3.ZERO)
 	facing.append(squad_facing[sq])
+	var ut := squad_type[sq]
+	utype.append(ut)
+	rad.append(U_RADIUS[ut])
+	engage_t.append(0.0)
+	disengage_t.append(0.0)
 	team.append(t)
 	squad.append(sq)
 	slot.append(k)
-	hp.append(100.0)
+	hp.append(U_HP[ut])
 	state.append(State.IDLE)
 	target.append(NO_TARGET)
 	think_timer.append(rng.randf() * think_far)
@@ -231,7 +341,8 @@ func slot_position(sq: int, k: int) -> Vector3:
 	var right := Vector3(-f.z, 0, f.x)
 	var file := k % 5
 	var rank := k / 5
-	return squad_anchor[sq] + right * ((file - 2) * 1.4) - f * (rank * 1.4)
+	var sp: float = U_SPACING[squad_type[sq]]
+	return squad_anchor[sq] + right * ((file - 2) * sp) - f * (rank * sp)
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +389,14 @@ func _physics_process(delta: float) -> void:
 
 	_move_and_fight(delta)
 	var t3 := Time.get_ticks_usec()
+	_update_arrows(delta)
+	var t4 := Time.get_ticks_usec()
+	t_arrows = t4 - t3
 
 	t_grid = t1 - t0
 	t_think = t2 - t1
 	t_move = t3 - t2
-	t_total = t3 - t0
+	t_total = t4 - t0
 	_check_victory()
 
 
@@ -392,6 +506,8 @@ func _think(i: int) -> void:
 		tg = NO_TARGET
 
 	var radius := search_radius if order == Order.CHARGE else engage_radius
+	if utype[i] == UnitType.ARCHER:
+		radius = maxf(radius, ARCHER_RANGE)
 	var best := _find_enemy(i, p, my_team, radius)
 	if best != NO_TARGET:
 		tg = best
@@ -421,6 +537,18 @@ func _think(i: int) -> void:
 func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 	var best := NO_TARGET
 	var best_d := radius * radius
+	# 半徑很大（弓兵射程）時，掃描網格格子數會比直接掃全部士兵還多，改用線性掃描
+	if radius > 24.0:
+		for j in count:
+			if state[j] == State.DEAD or team[j] == my_team:
+				continue
+			var dj := p.distance_squared_to(pos[j])
+			if attackers[j] >= max_attackers and target[i] != j and dj > 4.0:
+				dj *= 4.0
+			if dj < best_d:
+				best_d = dj
+				best = j
+		return best
 	var r_cells := int(ceil(radius / cell_size))
 	var c0x := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
 	var c0z := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
@@ -492,8 +620,6 @@ func _move_and_fight(delta: float) -> void:
 		pl_speed = mv.length()
 		pl_fwd = mv / pl_speed if pl_speed > 0.1 else player.facing
 		pl_radius = 1.3 if player.mounted else 0.5
-	var sep_dist := soldier_radius * 2.0 + 0.1
-	var sep_d2 := sep_dist * sep_dist
 	var obstacles := terrain.obstacles
 
 	for i in count:
@@ -518,23 +644,46 @@ func _move_and_fight(delta: float) -> void:
 		atk_cooldown[i] -= delta
 		atk_anim[i] = maxf(atk_anim[i] - delta, 0.0)
 
+		var ut := utype[i]
+		var walk: float = U_WALK[ut]
+		var run: float = U_RUN[ut]
+		trample_cd[i] = maxf(trample_cd[i] - delta, 0.0)
 		if stun[i] > 0.0:
 			stun[i] -= delta
+		elif ut == UnitType.CAVALRY and disengage_t[i] > 0.0:
+			# 騎兵脫離：沿目前朝向全速跑開，之後重新找目標衝鋒
+			disengage_t[i] -= delta
+			desired = face * run
 		elif tg != NO_TARGET:
 			var tp := _target_pos(tg)
 			var to := tp - p
 			to.y = 0.0
 			var d := to.length()
-			var reach := attack_range + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
+			var reach: float = U_REACH[ut] + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
 			if d > 0.001:
 				face = to / d
-			if d > reach * 0.85:
-				desired = face * (run_speed if d > 6.0 else walk_speed)
-			elif atk_cooldown[i] <= 0.0 and atk_hit_at[i] <= 0.0:
-				# 出手：蓄力 0.25 秒後結算
-				atk_anim[i] = 0.45
-				atk_hit_at[i] = 0.25
-				atk_cooldown[i] = rng.randf_range(1.2, 1.8)
+			if ut == UnitType.ARCHER and d > ARCHER_MIN_RANGE:
+				# 弓兵：射程內站定放箭，射程外前進
+				if d > ARCHER_RANGE:
+					desired = face * run
+				elif atk_cooldown[i] <= 0.0:
+					atk_anim[i] = 0.6
+					atk_cooldown[i] = rng.randf_range(2.4, 3.2)
+					_fire_arrow(i, p, tg, d)
+			elif d > reach * 0.85:
+				desired = face * (run if (d > 6.0 or ut == UnitType.CAVALRY) else walk)
+			else:
+				if ut == UnitType.CAVALRY:
+					engage_t[i] += delta
+					if engage_t[i] > CAV_MELEE_TIME:
+						engage_t[i] = 0.0
+						disengage_t[i] = CAV_DISENGAGE_TIME
+						face = (-face).rotated(Vector3.UP, rng.randf_range(-0.7, 0.7))
+				if atk_cooldown[i] <= 0.0 and atk_hit_at[i] <= 0.0:
+					# 出手：蓄力 0.25 秒後結算
+					atk_anim[i] = 0.45
+					atk_hit_at[i] = 0.25
+					atk_cooldown[i] = rng.randf_range(1.2, 1.8)
 		else:
 			var order := squad_order[squad[i]]
 			if order != Order.CHARGE:
@@ -553,9 +702,9 @@ func _move_and_fight(delta: float) -> void:
 			atk_hit_at[i] -= delta
 			if atk_hit_at[i] <= 0.0 and tg != NO_TARGET:
 				var tp2 := _target_pos(tg)
-				var reach2 := attack_range + 0.4 + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
+				var reach2: float = U_REACH[ut] + 0.4 + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
 				if Vector2(tp2.x - p.x, tp2.z - p.z).length() <= reach2 and rng.randf() < 0.75:
-					var dmg := rng.randf_range(9.0, 14.0)
+					var dmg := rng.randf_range(U_DMG_MIN[ut], U_DMG_MAX[ut])
 					if tg == TARGET_PLAYER:
 						player.take_damage(dmg)
 					else:
@@ -566,6 +715,9 @@ func _move_and_fight(delta: float) -> void:
 
 		# 分離力（網格鄰居）
 		var push := Vector3.ZERO
+		var my_r := rad[i]
+		var my_team := team[i]
+		var cav_speed := v.length() if ut == UnitType.CAVALRY else 0.0
 		var cx := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
 		var cz := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
 		for gz in range(maxi(cz - 1, 0), mini(cz + 2, _grid_w)):
@@ -576,17 +728,27 @@ func _move_and_fight(delta: float) -> void:
 						var dx := p.x - pos[j].x
 						var dz := p.z - pos[j].z
 						var d2 := dx * dx + dz * dz
-						if d2 < sep_d2 and d2 > 0.000001:
+						var sd := my_r + rad[j] + 0.1
+						if d2 < sd * sd and d2 > 0.000001:
 							var dd := sqrt(d2)
-							var k := (sep_dist - dd) / dd
+							var k := (sd - dd) / dd
 							push.x += dx * k
 							push.z += dz * k
+							# 騎兵衝撞：高速撞上前方的敵兵 → 傷害＋擊飛，自己也減速
+							if cav_speed > CAV_CHARGE_SPEED and team[j] != my_team and trample_cd[j] <= 0.0 \
+									and (-dx * v.x - dz * v.z) > 0.0:
+								trample_cd[j] = trample_cooldown
+								var vdir := v / cav_speed
+								apply_damage(j, 10.0 + cav_speed * 1.5, vdir * (0.5 + cav_speed * 0.08))
+								cavalry_impact.emit(pos[j] + Vector3(0, 1.0, 0), cav_speed)
+								v *= 0.6
+								cav_speed = v.length()
 					j = _cell_next[j]
 		# 地形障礙（岩石）
 		for ob in obstacles:
 			var ox := p.x - ob.x
 			var oz := p.z - ob.y
-			var rr := ob.z + soldier_radius
+			var rr := ob.z + my_r
 			var od2 := ox * ox + oz * oz
 			if od2 < rr * rr and od2 > 0.000001:
 				var od := sqrt(od2)
@@ -597,8 +759,7 @@ func _move_and_fight(delta: float) -> void:
 			var rx := p.x - pl_pos.x
 			var rz := p.z - pl_pos.z
 			var rd2 := rx * rx + rz * rz
-			var min_d := pl_radius + soldier_radius
-			trample_cd[i] = maxf(trample_cd[i] - delta, 0.0)
+			var min_d := pl_radius + my_r
 			if rd2 < min_d * min_d and rd2 > 0.000001:
 				var rd := sqrt(rd2)
 				push.x += rx / rd * (min_d - rd) * 3.0
@@ -635,6 +796,92 @@ func _move_and_fight(delta: float) -> void:
 			state[i] = State.MOVE
 		else:
 			state[i] = State.IDLE
+
+
+# ---------------------------------------------------------------------------
+# 箭矢：拋物線飛行，預判目標移動；只在接近地面高度時才做命中檢查
+# ---------------------------------------------------------------------------
+func _fire_arrow(i: int, p: Vector3, tg: int, d: float) -> void:
+	var start := p + Vector3(0, 1.5, 0)
+	var tp := _target_pos(tg)
+	var tvel := vel[tg] if tg >= 0 else player.move_velocity()
+	var flight := clampf(d / ARROW_SPEED, 0.45, 2.0)
+	var aim_h := 1.0
+	if tg == TARGET_PLAYER and player.mounted:
+		aim_h = 1.8
+	var spread := d * 0.035
+	var aim := tp + tvel * flight + Vector3(rng.randfn(0.0, spread), aim_h, rng.randfn(0.0, spread))
+	var v0 := (aim - start) / flight + Vector3(0, 0.5 * ARROW_GRAVITY * flight, 0)
+	var k := _arrow_next
+	_arrow_next = (k + 1) % MAX_ARROWS
+	arrow_pos[k] = start
+	arrow_vel[k] = v0
+	arrow_team[k] = team[i]
+	arrow_state[k] = 1
+	arrow_life[k] = 4.0
+	arrow_fired.emit(start)
+
+
+func _update_arrows(delta: float) -> void:
+	var g := Vector3(0, -ARROW_GRAVITY, 0)
+	var pl_ok := player != null and not player.dead
+	var pl_center := player.body_center() if pl_ok else Vector3.ZERO
+	var pl_r := (1.2 if player.mounted else 0.7) if pl_ok else 0.0
+	arrows_in_flight = 0
+	for k in MAX_ARROWS:
+		var st := arrow_state[k]
+		if st == 0:
+			continue
+		if st == 2:
+			arrow_life[k] -= delta
+			if arrow_life[k] <= 0.0:
+				arrow_state[k] = 0
+			continue
+		arrows_in_flight += 1
+		var v := arrow_vel[k] + g * delta
+		var p := arrow_pos[k] + v * delta
+		arrow_vel[k] = v
+		arrow_pos[k] = p
+		arrow_life[k] -= delta
+		var ground := terrain.get_height(p.x, p.z)
+		if p.y <= ground + 0.05 or arrow_life[k] <= 0.0:
+			arrow_state[k] = 2
+			arrow_life[k] = ARROW_STUCK_TIME
+			arrow_pos[k] = Vector3(p.x, ground + 0.2, p.z)
+			arrow_hit.emit(arrow_pos[k], false)
+			continue
+		if p.y - ground > 3.0:
+			continue
+		var tm := arrow_team[k]
+		var hit := -1
+		var cx := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
+		var cz := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
+		for gz in range(maxi(cz - 1, 0), mini(cz + 2, _grid_w)):
+			if hit != -1:
+				break
+			for gx in range(maxi(cx - 1, 0), mini(cx + 2, _grid_w)):
+				var j := _cell_head[gz * _grid_w + gx]
+				while j != -1:
+					if team[j] != tm and state[j] != State.DEAD:
+						var dx := p.x - pos[j].x
+						var dz := p.z - pos[j].z
+						var r := rad[j] + 0.15
+						if dx * dx + dz * dz < r * r and p.y >= pos[j].y and p.y <= pos[j].y + U_HEIGHT[utype[j]]:
+							hit = j
+							break
+					j = _cell_next[j]
+				if hit != -1:
+					break
+		if hit != -1:
+			var flat := Vector3(v.x, 0, v.z).normalized()
+			apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX), flat * 0.25)
+			arrow_state[k] = 0
+			arrow_hit.emit(p, true)
+			continue
+		if pl_ok and tm != player.team and p.distance_to(pl_center) < pl_r:
+			player.take_damage(ARROW_DAMAGE_PLAYER)
+			arrow_state[k] = 0
+			arrow_hit.emit(p, true)
 
 
 # ---------------------------------------------------------------------------
@@ -688,14 +935,16 @@ func sweep_query(a0: Vector3, b0: Vector3, a1: Vector3, b1: Vector3, radius: flo
 	var c_lo_z := clampi(int((lo.z - margin - _grid_origin) / cell_size), 0, _grid_w - 1)
 	var c_hi_x := clampi(int((hi.x + margin - _grid_origin) / cell_size), 0, _grid_w - 1)
 	var c_hi_z := clampi(int((hi.z + margin - _grid_origin) / cell_size), 0, _grid_w - 1)
-	var hit_r := radius + soldier_radius
-	var heights := [0.5, 1.1, 1.6]
+	var heights := [0.5, 1.1, 1.6, 2.1]
 	for cz in range(c_lo_z, c_hi_z + 1):
 		for cx in range(c_lo_x, c_hi_x + 1):
 			var j := _cell_head[cz * _grid_w + cx]
 			while j != -1:
 				if team[j] != attacker_team and state[j] != State.DEAD and not exclude.has(j):
+					var hit_r := radius + rad[j]
 					for h in heights:
+						if h > U_HEIGHT[utype[j]]:
+							break
 						var c: Vector3 = pos[j] + Vector3(0, h, 0)
 						if _dist_point_tri(c, a0, b0, b1) <= hit_r or _dist_point_tri(c, a0, b1, a1) <= hit_r:
 							out.append(j)
@@ -775,8 +1024,8 @@ func stats_text() -> String:
 	var s := "我軍 %d　敵軍 %d　擊殺 %d：%d　戰鬥 %.0f 秒" % [alive_count[0], alive_count[1], kills[0], kills[1], battle_time]
 	if squad_count > 0:
 		s += "　我軍命令：%s" % order_name(_first_order(0))
-	s += "\n戰場邏輯 %.2f ms（網格 %.2f／決策 %.2f［%d 次］／移動戰鬥 %.2f）　士兵畫面 %.2f ms" % [
-		t_total / 1000.0, t_grid / 1000.0, t_think / 1000.0, think_calls, t_move / 1000.0, t_render / 1000.0]
+	s += "\n戰場邏輯 %.2f ms（網格 %.2f／決策 %.2f［%d 次］／移動戰鬥 %.2f／箭矢 %.2f［%d 支］）　士兵畫面 %.2f ms" % [
+		t_total / 1000.0, t_grid / 1000.0, t_think / 1000.0, think_calls, t_move / 1000.0, t_arrows / 1000.0, arrows_in_flight, t_render / 1000.0]
 	if winner != -1:
 		s += "\n%s勝利！按 R 重開" % ("我軍" if winner == 0 else "敵軍")
 	return s

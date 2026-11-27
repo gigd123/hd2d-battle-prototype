@@ -29,6 +29,16 @@ const RIDER_IDLE := 0
 const RIDER_WINDUP := 1
 const RIDER_SWING := 2
 
+# 騎兵（馬＋騎士合成一張）：8 欄 × 4 列（0 奔馳 A、1 奔馳 B、2 攻擊、3 倒地）
+const CAV_FRAME := Vector2i(48, 48)
+const CAV_ROWS := 4
+
+## 兵種（與 BattleManager.UnitType 相同順序）
+enum Unit { INFANTRY, ARCHER, CAVALRY }
+
+## 陣營色遮罩：純白 (1,1,1) 的像素是「可換色」區域（調色盤交換），其餘顏色保持原樣
+const TEAM_MASK := Color(1, 1, 1)
+
 const OUTLINE := Color(0.08, 0.07, 0.10, 1.0)
 
 static var _cache: Dictionary = {}
@@ -38,9 +48,50 @@ static var _cache: Dictionary = {}
 # 對外 API（結果會快取，多次呼叫共用同一張貼圖）
 # ---------------------------------------------------------------------------
 static func human_atlas() -> Texture2D:
-	if not _cache.has("human"):
-		_cache["human"] = ImageTexture.create_from_image(_build_human())
-	return _cache["human"]
+	return unit_atlas(Unit.INFANTRY)
+
+
+## 兵種圖集（白色衣服＝陣營色遮罩，給 MultiMesh 著色器做調色盤交換）
+static func unit_atlas(unit: int) -> Texture2D:
+	var key := "unit_%d" % unit
+	if not _cache.has(key):
+		_cache[key] = ImageTexture.create_from_image(_unit_image(unit))
+	return _cache[key]
+
+
+## 已換好陣營色的兵種圖集（給 Sprite3D 用；在 CPU 上把遮罩像素乘上陣營色）
+static func unit_atlas_tinted(unit: int, tint: Color) -> Texture2D:
+	var key := "unit_%d_%s" % [unit, tint.to_html()]
+	if not _cache.has(key):
+		var img: Image = _unit_image(unit).duplicate()
+		for y in img.get_height():
+			for x in img.get_width():
+				var c := img.get_pixel(x, y)
+				if c.a > 0.5 and c.r > 0.99 and c.g > 0.99 and c.b > 0.99:
+					img.set_pixel(x, y, Color(tint.r, tint.g, tint.b, 1.0))
+		_cache[key] = ImageTexture.create_from_image(img)
+	return _cache[key]
+
+
+static func unit_frame(unit: int) -> Vector2i:
+	return CAV_FRAME if unit == Unit.CAVALRY else HUMAN_FRAME
+
+
+static func unit_rows(unit: int) -> int:
+	return CAV_ROWS if unit == Unit.CAVALRY else HUMAN_ROWS
+
+
+static func _unit_image(unit: int) -> Image:
+	var key := "img_%d" % unit
+	if not _cache.has(key):
+		match unit:
+			Unit.ARCHER:
+				_cache[key] = _build_human(true)
+			Unit.CAVALRY:
+				_cache[key] = _build_cavalry()
+			_:
+				_cache[key] = _build_human(false)
+	return _cache[key]
 
 
 static func horse_atlas() -> Texture2D:
@@ -105,7 +156,7 @@ static func tree_texture() -> Texture2D:
 # ---------------------------------------------------------------------------
 # 步行人形
 # ---------------------------------------------------------------------------
-static func _build_human() -> Image:
+static func _build_human(archer: bool) -> Image:
 	var fw := HUMAN_FRAME.x
 	var fh := HUMAN_FRAME.y
 	var img := Image.create(fw * 8, fh * HUMAN_ROWS, false, Image.FORMAT_RGBA8)
@@ -120,15 +171,15 @@ static func _build_human() -> Image:
 			if row == ROW_DEAD:
 				_draw_human_dead(img, ox, oy, sx)
 			else:
-				_draw_human(img, ox, oy, sx, toward, row)
+				_draw_human(img, ox, oy, sx, toward, row, archer)
 			_outline(img, Rect2i(ox, oy, fw, fh))
 	return img
 
 
-static func _draw_human(img: Image, ox: int, oy: int, sx: float, toward: float, row: int) -> void:
+static func _draw_human(img: Image, ox: int, oy: int, sx: float, toward: float, row: int, archer := false) -> void:
 	var cx := ox + 10
 	var side := absf(sx) > 0.6
-	var body := Color(0.95, 0.95, 0.95)      # 會被陣營色染色
+	var body := TEAM_MASK                    # 會被換成陣營色
 	var dark := Color(0.35, 0.33, 0.36)
 	var skin := Color(0.92, 0.80, 0.68)
 	var metal := Color(0.70, 0.72, 0.78)
@@ -164,6 +215,13 @@ static func _draw_human(img: Image, ox: int, oy: int, sx: float, toward: float, 
 	# 武器（長槍）與盾：右手的畫面位置隨朝向改變
 	var hand_x := cx + roundi(-toward * 5.0 + sx * 1.0)
 	var shield_x := cx + roundi(toward * 5.0 - sx * 1.0)
+	if archer:
+		_draw_bow(img, cx, oy, sx, toward, row, hand_x, wood)
+		# 弓兵：帽子取代頭盔、背上箭袋
+		_rect(img, cx - 3, oy + 4, 6, 2, Color(0.30, 0.45, 0.25))
+		if toward < 0.3:
+			_rect(img, cx + roundi(toward * 3.0) - 1, oy + 11, 3, 8, Color(0.45, 0.30, 0.20))
+		return
 	if row == ROW_ATTACK:
 		var tip := Vector2i(cx + roundi(sx * 9.0), oy + 9 + roundi(maxf(toward, 0.0) * 3.0))
 		_line(img, Vector2i(hand_x, oy + 17), tip, wood)
@@ -175,10 +233,33 @@ static func _draw_human(img: Image, ox: int, oy: int, sx: float, toward: float, 
 		_rect(img, shield_x - 2, oy + 13, 4, 6, Color(0.60, 0.60, 0.62))
 
 
+## 弓：待機時垂直握在手邊；攻擊列＝拉弓瞄準前方（弓身往朝向那側伸出）
+static func _draw_bow(img: Image, cx: int, oy: int, sx: float, toward: float, row: int, hand_x: int, wood: Color) -> void:
+	var string_c := Color(0.85, 0.85, 0.80)
+	if row == ROW_ATTACK:
+		var bx := cx + roundi(sx * 7.0)
+		var by := oy + 13
+		var bend := 1 if sx >= 0.0 else -1
+		if absf(sx) < 0.4:
+			# 正面／背面：弓橫在胸前
+			_line(img, Vector2i(cx - 6, by - 1), Vector2i(cx + 6, by - 1), wood)
+			_px(img, cx - 6, by, wood)
+			_px(img, cx + 6, by, wood)
+		else:
+			_line(img, Vector2i(bx, by - 6), Vector2i(bx + bend, by), wood)
+			_line(img, Vector2i(bx + bend, by), Vector2i(bx, by + 6), wood)
+			_line(img, Vector2i(bx, by - 6), Vector2i(cx - bend, by), string_c)
+			_line(img, Vector2i(cx - bend, by), Vector2i(bx, by + 6), string_c)
+	else:
+		_line(img, Vector2i(hand_x, oy + 7), Vector2i(hand_x + 1, oy + 15), wood)
+		_line(img, Vector2i(hand_x + 1, oy + 15), Vector2i(hand_x, oy + 23), wood)
+		_line(img, Vector2i(hand_x, oy + 7), Vector2i(hand_x, oy + 23), string_c)
+
+
 static func _draw_human_dead(img: Image, ox: int, oy: int, sx: float) -> void:
 	var dir := 1 if sx >= 0.0 else -1
 	var cx := ox + 10
-	_rect(img, cx - 6, oy + 24, 12, 4, Color(0.95, 0.95, 0.95))
+	_rect(img, cx - 6, oy + 24, 12, 4, TEAM_MASK)
 	_rect(img, cx + dir * 6 - (2 if dir < 0 else 0), oy + 23, 4, 5, Color(0.92, 0.80, 0.68))
 	_line(img, Vector2i(ox + 2, oy + 28), Vector2i(ox + 18, oy + 26), Color(0.55, 0.42, 0.30))
 
@@ -270,6 +351,11 @@ static func _build_horse_and_anchors() -> void:
 # 騎士（馬上姿勢，含座位錨點與武器尖端錨點）
 # ---------------------------------------------------------------------------
 static func _build_rider_and_anchors() -> void:
+	var img := _build_rider_image(Color(0.25, 0.45, 0.85))   # 玩家固定藍色
+	_cache["rider"] = ImageTexture.create_from_image(img)
+
+
+static func _build_rider_image(body: Color) -> Image:
 	var fw := RIDER_FRAME.x
 	var fh := RIDER_FRAME.y
 	var img := Image.create(fw * 8, fh * RIDER_ROWS, false, Image.FORMAT_RGBA8)
@@ -279,7 +365,6 @@ static func _build_rider_and_anchors() -> void:
 	anchors.columns = 8
 	anchors.rows = RIDER_ROWS
 	anchors.pixel_size = PIXEL_SIZE
-	var body := Color(0.25, 0.45, 0.85)     # 玩家固定藍色
 	var dark := Color(0.20, 0.20, 0.26)
 	var skin := Color(0.92, 0.80, 0.68)
 	var metal := Color(0.80, 0.82, 0.88)
@@ -331,8 +416,8 @@ static func _build_rider_and_anchors() -> void:
 			_outline(img, Rect2i(ox, oy, fw, fh))
 			anchors.set_point("seat", col, row, Vector2(cx - ox, seat_y - oy))
 			anchors.set_point("weapon_tip", col, row, Vector2(tip.x - ox, tip.y - oy))
-	_cache["rider"] = ImageTexture.create_from_image(img)
 	_cache["rider_anchors"] = anchors
+	return img
 
 
 # ---------------------------------------------------------------------------
@@ -386,3 +471,56 @@ static func _outline(img: Image, r: Rect2i) -> void:
 					break
 	for m in marks:
 		img.set_pixel(m.x, m.y, OUTLINE)
+
+
+# ---------------------------------------------------------------------------
+# 騎兵：把馬幀與（白衣）騎士幀依錨點合成一張，給大量士兵用
+# ---------------------------------------------------------------------------
+static func _build_cavalry() -> Image:
+	horse_atlas()                      # 確保馬圖與錨點已產生
+	var horse_img: Image = (_cache["horse"] as ImageTexture).get_image()
+	var anchors: AnchorSet = _cache["horse_anchors"]
+	var rider_img := _build_rider_image(TEAM_MASK)
+	var rider_anchors_set: AnchorSet = _cache["rider_anchors"]
+	var fw := CAV_FRAME.x
+	var fh := CAV_FRAME.y
+	var img := Image.create(fw * 8, fh * CAV_ROWS, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var y_off := fh - HORSE_FRAME.y
+	for col in 8:
+		var a := col * TAU / 8.0
+		var sx := sin(a)
+		for row in CAV_ROWS:
+			var ox := col * fw
+			var oy := row * fh
+			if row == 3:
+				_draw_cavalry_dead(img, ox, oy, sx)
+				continue
+			var horse_row := 1 if row == 1 else 0
+			var rider_row := RIDER_SWING if row == 2 else RIDER_IDLE
+			var saddle := anchors.get_point("saddle", col, horse_row)
+			var seat := rider_anchors_set.get_point("seat", col, rider_row)
+			var h_src := Rect2i(col * HORSE_FRAME.x, horse_row * HORSE_FRAME.y, HORSE_FRAME.x, HORSE_FRAME.y)
+			var r_src := Rect2i(col * RIDER_FRAME.x, rider_row * RIDER_FRAME.y, RIDER_FRAME.x, RIDER_FRAME.y)
+			var r_dst := Vector2i(ox + int(saddle.x - seat.x), oy + y_off + int(saddle.y - seat.y))
+			if anchors.layer_for(col) < 0:
+				img.blend_rect(rider_img, r_src, r_dst)
+				img.blend_rect(horse_img, h_src, Vector2i(ox, oy + y_off))
+			else:
+				img.blend_rect(horse_img, h_src, Vector2i(ox, oy + y_off))
+				img.blend_rect(rider_img, r_src, r_dst)
+	return img
+
+
+static func _draw_cavalry_dead(img: Image, ox: int, oy: int, sx: float) -> void:
+	var dir := 1 if sx >= 0.0 else -1
+	var cx := ox + CAV_FRAME.x / 2
+	var by := oy + CAV_FRAME.y - 10
+	var coat := Color(0.55, 0.36, 0.22)
+	_rect(img, cx - 14, by, 28, 8, coat)                         # 倒地的馬身
+	_rect(img, cx + dir * 14 - (5 if dir < 0 else 0), by + 2, 6, 5, coat)   # 頭
+	for i in 4:
+		_rect(img, cx - 10 + i * 6, by - 3, 2, 4, Color(0.40, 0.25, 0.15))  # 朝上的腿
+	_rect(img, cx - dir * 10 - 4, by + 4, 9, 4, TEAM_MASK)        # 摔落的騎士
+	_rect(img, cx - dir * 10 + (5 if dir < 0 else -7), by + 3, 3, 4, Color(0.92, 0.80, 0.68))
+	_outline(img, Rect2i(ox, oy, CAV_FRAME.x, CAV_FRAME.y))

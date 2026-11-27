@@ -46,6 +46,9 @@ func setup(p_player: PlayerController, p_cam: OrbitFollowCamera, p_battle: Battl
 	if battle:
 		battle.soldier_struck.connect(_on_soldier_struck)
 		battle.trampled.connect(_on_trampled)
+		battle.arrow_fired.connect(func(pt: Vector3): _play3d(pt, PlaceholderAudio.bow(), randf_range(0.9, 1.15), -12.0))
+		battle.arrow_hit.connect(func(pt: Vector3, on_unit: bool): _play3d(pt, PlaceholderAudio.thunk(), randf_range(0.9, 1.2) * (1.0 if on_unit else 1.3), -8.0 if on_unit else -16.0))
+		battle.cavalry_impact.connect(_on_cavalry_impact)
 	player.swing_started.connect(_on_swing_started)
 	player.hit_detail.connect(_on_hit)
 	player.damaged.connect(_on_damaged)
@@ -72,7 +75,7 @@ func _ready() -> void:
 		a.bus = "Master"
 		add_child(a)
 		_audio.append(a)
-	for i in 10:
+	for i in 16:
 		var a3 := AudioStreamPlayer3D.new()
 		a3.unit_size = 8.0
 		a3.max_distance = 60.0
@@ -179,15 +182,27 @@ func _on_trampled(point: Vector3, speed: float, killed: bool) -> void:
 
 
 func _on_soldier_struck(point: Vector3, landed: bool) -> void:
-	if _clash_budget < 1.0:
-		return
-	_clash_budget -= 1.0
+	_play3d(point, PlaceholderAudio.hit() if landed and randf() < 0.4 else PlaceholderAudio.clang(), randf_range(0.85, 1.2), -10.0)
+
+
+func _on_cavalry_impact(point: Vector3, speed: float) -> void:
+	_play3d(point, PlaceholderAudio.impact(), randf_range(0.85, 1.05), -4.0, true)
+	if cam_rig and player and point.distance_to(player.global_position) < 12.0:
+		cam_rig.add_shake(0.15 * clampf(speed / 9.0, 0.3, 1.0))
+
+
+## 3D 定位音效，共用每秒上限（important 不受上限限制）
+func _play3d(point: Vector3, stream: AudioStream, pitch: float, db: float, important := false) -> void:
+	if not important:
+		if _clash_budget < 1.0:
+			return
+		_clash_budget -= 1.0
 	var a := _audio3d[_audio3d_i]
 	_audio3d_i = (_audio3d_i + 1) % _audio3d.size()
 	a.global_position = point
-	a.stream = PlaceholderAudio.hit() if landed and randf() < 0.4 else PlaceholderAudio.clang()
-	a.pitch_scale = randf_range(0.85, 1.2)
-	a.volume_db = -10.0
+	a.stream = stream
+	a.pitch_scale = pitch
+	a.volume_db = db
 	a.play()
 
 

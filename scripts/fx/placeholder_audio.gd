@@ -73,6 +73,27 @@ static func kill() -> AudioStreamWAV:
 	return _cache["kill"]
 
 
+## 放箭聲：撥弦（快速衰減的低音加泛音）＋箭離弦的短促氣音。
+static func bow() -> AudioStreamWAV:
+	if not _cache.has("bow"):
+		var n := int(RATE * 0.25)
+		var data := PackedFloat32Array()
+		data.resize(n)
+		for i in n:
+			var t := float(i) / RATE
+			var v := sin(TAU * 196.0 * t) * exp(-18.0 * t) + sin(TAU * 392.0 * t) * 0.5 * exp(-26.0 * t)
+			data[i] = v * 0.6
+		_cache["bow"] = _make(_mix(data, _noise_burst(0.09, 0.5, 21), 0.35))
+	return _cache["bow"]
+
+
+## 中箭／箭插地聲：很短的悶響。
+static func thunk() -> AudioStreamWAV:
+	if not _cache.has("thunk"):
+		_cache["thunk"] = _make(_mix(_thump_data(0.07, 260.0, 120.0, 0.0, 0.6), _noise_burst(0.025, 0.4, 13), 0.6))
+	return _cache["thunk"]
+
+
 static func _thump(length: float, f0: float, f1: float, noise_len: float, gain: float) -> AudioStreamWAV:
 	return _make(_thump_data(length, f0, f1, noise_len, gain))
 

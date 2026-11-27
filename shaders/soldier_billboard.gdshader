@@ -1,6 +1,6 @@
 // 士兵 MultiMesh 用的 Y 軸 Billboard 著色器。
-// 每個實例：transform 的位移 = 腳底位置；INSTANCE_CUSTOM.x = 幀編號（列*8+欄）、.y = 是否水平翻轉；
-// COLOR = 陣營色（含受擊閃白）。整群士兵只需 1 次 draw call。
+// 每個實例：transform 的位移 = 腳底位置；INSTANCE_CUSTOM = (幀編號 列*8+欄, 水平翻轉, 閃白, 變暗)；
+// COLOR = 陣營色。貼圖裡純白 (1,1,1) 的像素才換成陣營色（調色盤交換），其他顏色保持原樣。
 shader_type spatial;
 render_mode unshaded, cull_disabled, skip_vertex_transform;
 
@@ -10,6 +10,7 @@ uniform vec2 grid = vec2(8.0, 4.0);
 uniform bool full_billboard = false;
 
 varying vec4 v_color;
+varying vec2 v_fx;
 
 void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
@@ -32,6 +33,7 @@ void vertex() {
 	UV = (vec2(col, row) + uv) / grid;
 	// 實例顏色以 sRGB 給定（與 Sprite3D.modulate 一致），轉成線性空間
 	v_color = vec4(pow(COLOR.rgb, vec3(2.2)), COLOR.a);
+	v_fx = INSTANCE_CUSTOM.zw;
 }
 
 void fragment() {
@@ -39,5 +41,9 @@ void fragment() {
 	if (tex.a < 0.5) {
 		discard;
 	}
-	ALBEDO = tex.rgb * v_color.rgb;
+	float team_mask = step(0.99, min(min(tex.r, tex.g), tex.b));
+	vec3 col = mix(tex.rgb, v_color.rgb, team_mask);
+	col = mix(col, vec3(1.6), v_fx.x);
+	col *= 1.0 - v_fx.y * 0.45;
+	ALBEDO = col;
 }

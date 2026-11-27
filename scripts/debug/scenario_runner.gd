@@ -55,7 +55,7 @@ func setup(scenario: String) -> void:
 		"demo":
 			# 展示影片：上馬 → 下令衝鋒 → 奔馳衝入敵陣連續揮擊 → 回轉再衝 → 下令跟隨 → 下馬
 			steps = [
-				[0.0, "cam", "17"], [0.0, "followcam", ""], [0.8, "tap", "interact"],
+				[0.0, "cam", "20"], [0.0, "followcam", ""], [0.8, "tap", "interact"],
 				[1.8, "tap", "order_charge"], [2.0, "hold", "move_forward"], [2.8, "hold", "sprint"],
 				[5.40, "tap", "attack"],
 				[6.06, "tap", "attack"],

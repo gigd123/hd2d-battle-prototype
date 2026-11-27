@@ -1,7 +1,7 @@
 class_name SpriteSoldierRenderer
 extends SoldierRenderer
 ## 實作 A：每個士兵一個 Sprite3D（研究報告建議的原型起點，最直觀、好除錯）。
-## 代價是每個士兵一個節點與一次繪製，人數多時可與 MultiMesh 實作比較。
+## 陣營色用 CPU 預先換好色的貼圖（每兵種×陣營一張），modulate 只用來閃白與變暗。
 
 var _sprites: Array[Sprite3D] = []
 var _mode := BaseMaterial3D.BILLBOARD_FIXED_Y
@@ -12,19 +12,20 @@ func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 	super.render(bm, cam, frac)
 
 
-func _create(n: int) -> void:
+func _create(bm: BattleManager) -> void:
 	for s in _sprites:
 		s.queue_free()
 	_sprites.clear()
-	var tex := PlaceholderArt.human_atlas()
-	for i in n:
-		var s := LayeredActorVisual.make_sprite(tex, PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
+	for i in bm.count:
+		var ut := bm.utype[i]
+		var tex := PlaceholderArt.unit_atlas_tinted(ut, TEAM_COLORS[bm.team[i]])
+		var s := LayeredActorVisual.make_sprite(tex, PlaceholderArt.unit_frame(ut), PlaceholderArt.unit_rows(ut))
 		s.name = "Soldier%d" % i
 		add_child(s)
 		_sprites.append(s)
 
 
-func _draw_soldier(i: int, p: Vector3, frame: int, flip: bool, color: Color, vis: bool) -> void:
+func _draw_soldier(i: int, p: Vector3, frame: int, flip: bool, flash: float, dark: float, vis: bool) -> void:
 	var s := _sprites[i]
 	if s.visible != vis:
 		s.visible = vis
@@ -35,4 +36,9 @@ func _draw_soldier(i: int, p: Vector3, frame: int, flip: bool, color: Color, vis
 	s.position = p
 	s.frame = frame
 	s.flip_h = flip
-	s.modulate = color
+	if flash > 0.0:
+		s.modulate = Color(2.0, 2.0, 2.0)
+	elif dark > 0.0:
+		s.modulate = Color(0.55, 0.55, 0.55)
+	else:
+		s.modulate = Color.WHITE
