@@ -25,6 +25,9 @@ var terrain: BattleTerrain
 var auto_orbit := false
 var auto_orbit_center := Vector3.ZERO
 var auto_orbit_speed := 0.12
+## 觀戰鏡頭（V）：拉遠、壓低俯角、繞著戰場中心慢慢轉；再按一次恢復原本的相機
+var spectating := false
+var _saved := {}
 
 var camera: Camera3D
 ## 鏡頭震動（純畫面效果）：add_shake() 疊加強度，隨時間衰減
@@ -55,6 +58,13 @@ func apply_postfx(enabled: bool) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if spectating:
+		# 觀戰中仍可用滾輪調整距離
+		if event.is_action_pressed("zoom_in"):
+			distance = maxf(min_distance, distance * 0.9)
+		elif event.is_action_pressed("zoom_out"):
+			distance = minf(80.0, distance * 1.1)
+		return
 	if auto_orbit:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -74,7 +84,7 @@ func _process(delta: float) -> void:
 		goal = auto_orbit_center
 	elif target:
 		goal = target.call("visual_position") if target.has_method("visual_position") else target.global_position
-	_focus = _focus.lerp(goal, 1.0 - exp(-follow_smooth * delta))
+	_focus = _focus.lerp(goal, 1.0 - exp(-(1.2 if spectating else follow_smooth) * delta))
 	var look_at_point := _focus + Vector3(0, 1.4, 0)
 	var pitch := deg_to_rad(pitch_deg)
 	var offset := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * distance
@@ -98,6 +108,25 @@ func _process(delta: float) -> void:
 	_attrs.dof_blur_far_transition = distance * 1.5
 	_attrs.dof_blur_near_distance = maxf(distance * 0.45, 1.0)
 	_attrs.dof_blur_near_transition = distance * 0.3
+
+
+## 切換觀戰鏡頭；回傳切換後是否在觀戰
+func toggle_spectate(center: Vector3) -> bool:
+	spectating = not spectating
+	if spectating:
+		_saved = {"yaw": yaw, "distance": distance, "pitch": pitch_deg, "auto": auto_orbit, "speed": auto_orbit_speed}
+		auto_orbit = true
+		auto_orbit_center = center
+		auto_orbit_speed = 0.16
+		distance = 46.0
+		pitch_deg = 22.0
+	else:
+		yaw = _saved.get("yaw", yaw)
+		distance = _saved.get("distance", distance)
+		pitch_deg = _saved.get("pitch", pitch_deg)
+		auto_orbit = _saved.get("auto", false)
+		auto_orbit_speed = _saved.get("speed", auto_orbit_speed)
+	return spectating
 
 
 func add_shake(amount: float) -> void:

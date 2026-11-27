@@ -80,6 +80,12 @@ func setup(scenario: String) -> void:
 				[20.5, "tap", "attack"],
 				[22.0, "report", ""], [22.1, "quit", ""],
 			]
+		"spectate":
+			# 觀戰鏡頭：切換、截圖、切回
+			steps = [
+				[0.3, "tap", "order_charge"], [0.5, "tap", "spectate"], [6.0, "shot", "spectate_on"],
+				[6.2, "tap", "spectate"], [8.0, "shot", "spectate_off"], [8.2, "quit", ""],
+			]
 		"terrains":
 			# 場地展示：五種場地輪流，每種俯瞰繞場約 7 秒，雙方開場即衝鋒
 			var keys := BattleTerrain.TYPE_KEYS

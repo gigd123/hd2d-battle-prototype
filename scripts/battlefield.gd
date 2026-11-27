@@ -122,6 +122,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("random_terrain"):
 		GameConfig.random_terrain()
 		get_tree().reload_current_scene()
+	elif event.is_action_pressed("spectate"):
+		var on := cam_rig.toggle_spectate(battle_center())
+		hud.toast("觀戰鏡頭（滾輪調整距離，V 返回）" if on else "回到玩家相機")
 	elif event.is_action_pressed("toggle_backend"):
 		GameConfig.soldier_backend = 1 - GameConfig.soldier_backend
 		restart_battle()
@@ -235,3 +238,28 @@ func _apply_terrain_environment() -> void:
 	sun.light_energy = e["sun_energy"]
 	# 太陽壓低一點，起伏的明暗比較明顯
 	sun.rotation_degrees = Vector3(-38, -35, 0)
+
+
+## 存活士兵的平均位置（觀戰鏡頭的繞場中心）；沒有士兵時用地圖中央
+func battle_center() -> Vector3:
+	var sum := Vector3.ZERO
+	var n := 0
+	for i in battle.count:
+		if battle.state[i] != BattleManager.State.DEAD:
+			sum += battle.pos[i]
+			n += 1
+	if n == 0:
+		return Vector3(0, terrain.get_height(0, 0), 0)
+	return sum / n
+
+
+var _center_timer := 0.0
+
+
+func _process(delta: float) -> void:
+	# 觀戰中每半秒更新一次繞場中心，相機會平滑地跟著戰線移動
+	if cam_rig and cam_rig.spectating and not stress_mode:
+		_center_timer -= delta
+		if _center_timer <= 0.0:
+			_center_timer = 0.5
+			cam_rig.auto_orbit_center = battle_center()

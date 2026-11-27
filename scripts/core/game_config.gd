@@ -130,6 +130,7 @@ func _setup_input_map() -> void:
 	_add_mouse("zoom_out", MOUSE_BUTTON_WHEEL_DOWN)
 	_add_keys("next_terrain", [KEY_F8])
 	_add_keys("random_terrain", [KEY_F9])
+	_add_keys("spectate", [KEY_V])             # 觀戰鏡頭
 
 
 func _add_keys(action: StringName, keys: Array) -> void:
