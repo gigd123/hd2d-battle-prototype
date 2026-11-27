@@ -492,6 +492,14 @@ func _move_and_fight(delta: float) -> void:
 		if state[i] == State.DEAD:
 			if hit_flash[i] > 0.0:
 				hit_flash[i] -= delta
+			# 致命一擊的擊退：屍體滑出去後停下
+			var dv := vel[i]
+			if dv.length_squared() > 0.01:
+				var dp := pos[i] + dv * delta
+				dp = terrain.clamp_to_map(dp, 4.0)
+				dp.y = terrain.get_height(dp.x, dp.z)
+				pos[i] = dp
+				vel[i] = dv * maxf(0.0, 1.0 - 6.0 * delta)
 			continue
 		var p := pos[i]
 		var v := vel[i]
@@ -623,12 +631,10 @@ func apply_damage(i: int, dmg: float, knock: Vector3) -> bool:
 	if state[i] == State.DEAD:
 		return false
 	hit_flash[i] = 0.15
-	stun[i] = 0.25
+	stun[i] = 0.25 + knock.length() * 0.15
 	atk_hit_at[i] = 0.0          # 被打中會中斷出手
-	var p := pos[i] + Vector3(knock.x, 0, knock.z)
-	p = terrain.clamp_to_map(p, 4.0)
-	p.y = terrain.get_height(p.x, p.z)
-	pos[i] = p
+	# 擊退改成速度衝量：硬直期間速度以每秒 8 倍衰減，總位移約等於 knock 長度，畫面上是滑出去而不是瞬移
+	vel[i] = vel[i] + Vector3(knock.x, 0, knock.z) * 8.0
 	if immortal:
 		return false
 	hp[i] -= dmg
@@ -643,7 +649,6 @@ func _kill(i: int) -> void:
 	hp[i] = 0.0
 	dead_time[i] = battle_time
 	target[i] = NO_TARGET
-	vel[i] = Vector3.ZERO
 	atk_anim[i] = 0.0
 	alive_count[team[i]] -= 1
 	kills[1 - team[i]] += 1

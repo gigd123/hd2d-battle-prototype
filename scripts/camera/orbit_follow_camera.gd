@@ -27,6 +27,9 @@ var auto_orbit_center := Vector3.ZERO
 var auto_orbit_speed := 0.12
 
 var camera: Camera3D
+## 鏡頭震動（純畫面效果）：add_shake() 疊加強度，隨時間衰減
+var shake := 0.0
+var _shake_t := 0.0
 var _focus := Vector3.ZERO
 var _attrs: CameraAttributesPractical
 
@@ -80,13 +83,25 @@ func _process(delta: float) -> void:
 	if terrain:
 		var ground := terrain.get_height(cam_pos.x, cam_pos.z)
 		cam_pos.y = maxf(cam_pos.y, ground + 1.0)
-	camera.global_position = cam_pos
-	camera.look_at(look_at_point, Vector3.UP)
+	# 震動用「未縮放」的時間衰減，命中停頓（time_scale 變小）期間仍會正常震完
+	var real_dt := delta / maxf(Engine.time_scale, 0.001)
+	var jitter := Vector3.ZERO
+	if shake > 0.001:
+		_shake_t += real_dt * 60.0
+		var amp := shake * shake * 0.35
+		jitter = Vector3(sin(_shake_t * 1.7), sin(_shake_t * 2.3 + 1.0), sin(_shake_t * 1.3 + 2.0)) * amp
+		shake = maxf(0.0, shake - real_dt * 2.5)
+	camera.global_position = cam_pos + jitter
+	camera.look_at(look_at_point + jitter * 0.5, Vector3.UP)
 	# 景深焦點跟著距離走（移軸感：焦點外的前景與遠景模糊）
 	_attrs.dof_blur_far_distance = distance + 12.0
 	_attrs.dof_blur_far_transition = distance * 1.5
 	_attrs.dof_blur_near_distance = maxf(distance * 0.45, 1.0)
 	_attrs.dof_blur_near_transition = distance * 0.3
+
+
+func add_shake(amount: float) -> void:
+	shake = clampf(shake + amount, 0.0, 1.0)
 
 
 ## 相機的「水平前方」，給角色做相機相對移動。

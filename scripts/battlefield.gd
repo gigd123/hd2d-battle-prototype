@@ -49,6 +49,12 @@ func _ready() -> void:
 		player.battle = battle
 		player.hit_landed.connect(_on_hit_landed)
 
+	if not stress_mode:
+		var fx := CombatFX.new()
+		fx.name = "CombatFX"
+		add_child(fx)
+		fx.setup(player, cam_rig)
+
 	debug_draw = DebugDraw.new()
 	debug_draw.name = "DebugDraw"
 	debug_draw.player = player

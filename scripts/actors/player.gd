@@ -6,6 +6,10 @@ extends CharacterBody3D
 
 signal hit_landed(hits: int, total_damage: float)
 signal died
+## 以下訊號只給畫面／音效回饋用（CombatFX），判定邏輯不依賴它們
+signal swing_started(mounted: bool)
+signal hit_detail(point: Vector3, damage: float, killed: bool, closing_speed: float)
+signal damaged(amount: float)
 
 enum AttackPhase { NONE, WINDUP, SWING, RECOVER }
 
@@ -54,6 +58,9 @@ var _walk_phase := 0.0
 var _prev_pos := Vector3.ZERO
 var _cur_pos := Vector3.ZERO
 var _shape: CollisionShape3D
+var _swing_dir := 1.0            # +1：右→左橫掃；-1：左→右（連段交替）
+var _attack_buffered := false    # 收招中按下攻擊 → 收招結束立刻接下一刀
+var _swing_t := -1.0             # 目前揮擊進度 0..1；-1 = 沒有在揮
 
 
 func _ready() -> void:
@@ -103,6 +110,7 @@ func take_damage(amount: float) -> void:
 	if dead:
 		return
 	hp -= amount
+	damaged.emit(amount)
 	if hp <= 0.0:
 		hp = 0.0
 		if mounted and _mount_t < 0.0:
@@ -147,9 +155,11 @@ func _physics_process(delta: float) -> void:
 		elif horse and global_position.distance_to(horse.global_position) <= mount_range:
 			_start_mount()
 
-	if Input.is_action_just_pressed("attack") and attack_phase == AttackPhase.NONE and _mount_t < 0.0:
-		attack_phase = AttackPhase.WINDUP
-		attack_timer = windup_time
+	if Input.is_action_just_pressed("attack") and _mount_t < 0.0:
+		if attack_phase == AttackPhase.NONE:
+			_begin_attack()
+		elif attack_phase == AttackPhase.RECOVER or attack_phase == AttackPhase.SWING:
+			_attack_buffered = true
 
 	if _mount_t >= 0.0:
 		_update_mount_transition(delta)
@@ -265,6 +275,22 @@ func _respawn() -> void:
 # ---------------------------------------------------------------------------
 # 揮擊與掃掠命中
 # ---------------------------------------------------------------------------
+func _begin_attack() -> void:
+	attack_phase = AttackPhase.WINDUP
+	attack_timer = windup_time
+	_attack_buffered = false
+
+
+## 給畫面回饋用：目前揮擊進度（0..1），收招中仍回傳 1 讓刀光淡出；沒有揮擊時回傳 -1。
+func swing_progress() -> float:
+	return _swing_t
+
+
+## 給畫面回饋用：以「畫面內插位置」計算刀柄與刀尖，讓刀光跟著角色畫面而不是物理步。
+func blade_at(t: float) -> Array:
+	return _swing_geometry(t, visual_position())
+
+
 func _update_attack(delta: float) -> void:
 	if attack_phase == AttackPhase.NONE:
 		return
@@ -274,12 +300,15 @@ func _update_attack(delta: float) -> void:
 			if attack_timer <= 0.0:
 				attack_phase = AttackPhase.SWING
 				attack_timer = swing_time
+				_swing_t = 0.0
 				_swing_hit.clear()
+				swing_started.emit(mounted)
 				var g := _swing_geometry(0.0)
 				_swing_prev_base = g[0]
 				_swing_prev_tip = g[1]
 		AttackPhase.SWING:
 			var t := clampf(1.0 - attack_timer / swing_time, 0.0, 1.0)
+			_swing_t = t
 			var g := _swing_geometry(t)
 			_sweep(_swing_prev_base, _swing_prev_tip, g[0], g[1])
 			_swing_prev_base = g[0]
@@ -288,20 +317,28 @@ func _update_attack(delta: float) -> void:
 				attack_phase = AttackPhase.RECOVER
 				attack_timer = recover_time
 		AttackPhase.RECOVER:
+			if attack_timer <= recover_time - 0.12:
+				_swing_t = -1.0
 			if attack_timer <= 0.0:
 				attack_phase = AttackPhase.NONE
+				_swing_dir = -_swing_dir
+				if _attack_buffered:
+					_begin_attack()
 
 
 ## t: 0..1 揮擊進度。回傳 [刀柄位置, 刀尖位置]（世界座標）。
 ## 由右後上方往左前下方橫掃；騎馬時從較高處往下砍到步兵胸口高度。
-func _swing_geometry(t: float) -> Array:
+func _swing_geometry(t: float, origin = null) -> Array:
+	var at: Vector3 = global_position if origin == null else origin
 	var f := facing
 	var right := Vector3(-f.z, 0, f.x)
 	var shoulder_h := 2.3 if mounted else 1.35
 	var reach := reach_mounted if mounted else reach_foot
-	var base := global_position + Vector3(0, shoulder_h, 0) + right * 0.25
-	var ang := lerpf(deg_to_rad(80.0), deg_to_rad(-80.0), t)
-	var drop := lerpf(0.2, -1.0 if mounted else -0.5, t)
+	var base := at + Vector3(0, shoulder_h, 0) + right * 0.25 * _swing_dir
+	# 前後段慢、中段快（ease），比等速轉動更有「甩出去」的感覺
+	var e := t * t * (3.0 - 2.0 * t)
+	var ang := lerpf(deg_to_rad(80.0), deg_to_rad(-80.0), e) * _swing_dir
+	var drop := lerpf(0.2, -1.0 if mounted else -0.5, e)
 	var tip := base + (f * cos(ang) + right * sin(ang)) * reach + Vector3(0, drop, 0)
 	var hilt := base + (tip - base) * 0.25
 	return [hilt, tip]
@@ -326,11 +363,13 @@ func _sweep(prev_base: Vector3, prev_tip: Vector3, base: Vector3, tip: Vector3) 
 		# 相對速度在「朝向目標」方向的分量：迎面衝鋒 > 靜止 > 同向追擊
 		var closing := maxf(0.0, (my_vel - svel).dot(to_target))
 		var dmg := base_damage + closing * speed_damage
-		var knock := to_target * (0.4 + closing * 0.08)
+		var knock := to_target * (0.6 + closing * 0.12)
 		var killed: bool = battle.call("apply_damage", idx, dmg, knock)
 		if killed:
 			total_kills += 1
 		total += dmg
+		var point := spos + Vector3(0, 1.2, 0) - to_target * 0.3
+		hit_detail.emit(point, dmg, killed, closing)
 	hit_landed.emit(hits.size(), total)
 
 
