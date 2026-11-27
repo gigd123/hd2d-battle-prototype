@@ -50,7 +50,7 @@ func _ready() -> void:
 		horse.battle = battle
 		player.battle = battle
 		player.hit_landed.connect(_on_hit_landed)
-		player.weapon_changed.connect(func(n: String): hud.toast("武器：" + n + ("（攻擊距離較遠，太貼近會卡住）" if n == "長槍" else "（揮砍，貼身也好用）"), 2.0))
+		player.weapon_changed.connect(func(_n: String): hud.toast(WeaponDefs.summary(player.wdef), 3.0))
 
 	if not stress_mode:
 		var fx := CombatFX.new()
@@ -98,6 +98,7 @@ func _spawn_player_and_horse(at: Vector3) -> void:
 	player.spawn_point = Vector3(at.x, terrain.get_height(at.x, at.z) + 0.1, at.z)
 	add_child(player)
 	player.global_position = player.spawn_point
+	horse.set_owner_player(player)
 	player.facing = Vector3(1, 0, 0)
 	cam_rig.target = player
 	cam_rig.yaw = -PI * 0.5      # 從玩家背後看向戰場（+X 方向）

@@ -335,6 +335,10 @@ func _bake_config(cfg_path: String) -> void:
 					anchor_data[an][ai + 1] = snappedf(py, 0.1)
 				# 逐層渲染
 				for li in layers.size():
+					# 這個圖層用不到的動作（例：弓的圖層不需要揮砍動作）就不烘，列留空
+					if _matches(act["name"], layers[li].get("skip_actions", [])):
+						continue
+					_cur_occluders = _occluder_mask(layers, li)
 					var needs_silhouette := li > 0 or not active_holdouts.is_empty()
 					var sil := PackedByteArray()
 					if needs_silhouette and post["outline"]:
@@ -412,6 +416,18 @@ func _make_toon(src: Material, light_dir: Array, cfg: Dictionary) -> ShaderMater
 	return m
 
 
+## 圖層 li 會被哪些較低圖層遮住：occluded_by 沒寫 = 全部較低圖層。
+## 同一位置的不同武器（劍、斧、弓…）不會同時出現，彼此不該互相挖洞。
+var _cur_occluders: Dictionary = {}
+func _occluder_mask(layers: Array, li: int) -> Dictionary:
+	var out := {}
+	var names: Array = layers[li].get("occluded_by", [])
+	for i in li:
+		if names.is_empty() or names.has(layers[i]["name"]):
+			out[i] = true
+	return out
+
+
 ## mode："color" 本層上色、較低層挖空；"team" 本層白/黑遮罩；"solo" 只畫本層（算完整輪廓用）
 func _apply_pass(meshes: Array, li: int, mode: String, holdouts: Array) -> void:
 	for m in meshes:
@@ -419,7 +435,7 @@ func _apply_pass(meshes: Array, li: int, mode: String, holdouts: Array) -> void:
 		var ml: int = m[1]
 		if ml < 0:
 			continue
-		if ml > li or (mode == "solo" and ml != li):
+		if ml > li or (mode == "solo" and ml != li) or (ml < li and not _cur_occluders.has(ml)):
 			mi.visible = false
 			continue
 		mi.visible = true
