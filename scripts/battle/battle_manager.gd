@@ -54,6 +54,11 @@ const ARROW_STUCK_TIME := 4.0
 const CAV_CHARGE_SPEED := 6.0          # 超過此速度撞到敵兵算衝撞
 const CAV_MELEE_TIME := 4.0            # 纏鬥這麼久就脫離、跑遠再衝
 const CAV_DISENGAGE_TIME := 2.2
+## 騎兵轉向速度（弧度／秒）：低速 → 全速。馬不能平移，只能邊前進邊轉
+const CAV_TURN_SLOW := 3.2
+const CAV_TURN_FAST := 1.6
+## 騎兵被分離力推動的比例（馬比步兵重，比較不會被人群推著橫移）
+const CAV_PUSH_SCALE := 0.35
 
 const TARGET_PLAYER := -2
 const NO_TARGET := -1
@@ -792,6 +797,21 @@ func _move_and_fight(delta: float) -> void:
 		var dl := Vector2(desired.x, desired.z).length()
 		if dl > 0.1:
 			desired *= terrain.move_factor(p.x, p.z, desired.x / dl, desired.z / dl)
+		if ut == UnitType.CAVALRY:
+			# 馬不能橫著走：身體朝向以有限速度轉向目標方向，速度只沿身體朝向
+			var want := face
+			var dlen := Vector2(desired.x, desired.z).length()
+			if dlen > 0.1:
+				want = desired / dlen
+			var cur := atan2(facing[i].x, facing[i].z)
+			var diff := wrapf(atan2(want.x, want.z) - cur, -PI, PI)
+			var tr := lerpf(CAV_TURN_SLOW, CAV_TURN_FAST, clampf(Vector2(v.x, v.z).length() / run, 0.0, 1.0))
+			cur += clampf(diff, -tr * delta, tr * delta)
+			face = Vector3(sin(cur), 0.0, cos(cur))
+			if dlen > 0.1:
+				# 急轉彎時減速（轉彎半徑），不會原地甩頭
+				desired = face * dlen * clampf(cos(diff), 0.25, 1.0)
+			push *= CAV_PUSH_SCALE
 		v = v.lerp(desired, minf(1.0, 8.0 * delta))
 		p.x += (v.x + push.x * 4.0) * delta
 		p.z += (v.z + push.z * 4.0) * delta

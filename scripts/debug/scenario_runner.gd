@@ -80,6 +80,12 @@ func setup(scenario: String) -> void:
 				[20.5, "tap", "attack"],
 				[22.0, "report", ""], [22.1, "quit", ""],
 			]
+		"cavalry":
+			# 騎兵特寫：我軍右翼騎兵迎面衝向鏡頭，看馬的朝向與轉彎
+			steps = [
+				[0.0, "overview_at", "0,-22,30,1.2"], [0.3, "charge", ""],
+				[4.0, "shot", "cav_01"], [7.0, "shot", "cav_02"], [10.0, "shot", "cav_03"], [12.0, "quit", ""],
+			]
 		"spectate":
 			# 觀戰鏡頭：切換、截圖、切回
 			steps = [
@@ -152,6 +158,21 @@ func _run(step: Array) -> void:
 			for c in hud.get_children():
 				(c as Label).visible = false
 			hud.toast("場地：%s　%s" % [ter.type_name(), BattleTerrain.TYPE_HINTS[ter.terrain_type]], 6.5)
+		"overview_at":
+			# 參數：中心 x, z, 距離, yaw
+			var v := arg.split(",")
+			var bf := get_tree().current_scene
+			var rig: OrbitFollowCamera = bf.get("cam_rig")
+			var ter: BattleTerrain = bf.get("terrain")
+			rig.auto_orbit = true
+			rig.auto_orbit_center = Vector3(float(v[0]), ter.get_height(float(v[0]), float(v[1])), float(v[1]))
+			rig.auto_orbit_speed = 0.06
+			rig.distance = float(v[2])
+			rig.yaw = float(v[3])
+			rig.pitch_deg = 26.0
+			var hud: BattleHUD = bf.get("hud")
+			for c in hud.get_children():
+				(c as Label).visible = false
 		"charge":
 			var bm: BattleManager = get_tree().current_scene.get("battle")
 			bm.issue_order(0, BattleManager.Order.CHARGE, Vector3.ZERO, Vector3.ZERO)

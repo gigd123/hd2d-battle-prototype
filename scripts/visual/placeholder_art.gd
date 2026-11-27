@@ -294,17 +294,30 @@ static func _build_horse_and_anchors() -> void:
 			var ox := col * fw
 			var oy := row * fh
 			var cx := ox + fw / 2
-			var body_len := int(lerpf(12.0, 32.0, s))
-			var body_top := oy + 14
+			# 斜向（3/4 視角）要有透視縮短：身體變短、近端低、遠端高，否則看起來像橫著走
+			var diag := s > 0.3 and s < 0.95
+			var body_len := int(lerpf(12.0, 32.0, s * s)) if diag else int(lerpf(12.0, 32.0, s))
+			var depth := roundi(toward * 3.0) if diag else 0     # 頭端相對身體中心的高低差（>0：頭在近處，畫面上較低）
+			var body_top := oy + 14 - absi(depth)   # 近端的腳仍落在原本的地面線
 			var bob := 1 if row == 1 else 0
+			var x0 := cx - body_len / 2
+			# 身體上某個 x 的高低偏移（尾端 -depth → 頭端 +depth）
+			var yo := func(x: int) -> int:
+				if depth == 0 or body_len <= 1:
+					return 0
+				var t := float(x - x0) / float(body_len - 1)
+				if dir < 0:
+					t = 1.0 - t
+				return roundi(lerpf(-depth, depth, t))
 			# 尾巴（頭的反方向；背對時在正中）
 			if toward < 0.6:
 				var tail_x := cx - dir * (body_len / 2 + 1) if s > 0.3 else cx
-				_rect(img, tail_x - 1, body_top + 1 - bob, 3, 11, mane)
-			# 腿：奔馳兩幀交錯
+				_rect(img, tail_x - 1, body_top + 1 - bob - depth, 3, 11, mane)
+			# 腿：奔馳兩幀交錯；斜向時遠側的腿（深色）往上縮一格
 			var leg_xs: Array[int] = []
 			if s > 0.3:
-				leg_xs = [cx - body_len / 2 + 2, cx - body_len / 2 + 5, cx + body_len / 2 - 6, cx + body_len / 2 - 3]
+				var inset := 2 if body_len > 16 else 1
+				leg_xs = [x0 + inset, x0 + inset + 3, x0 + body_len - inset - 4, x0 + body_len - inset - 1]
 			else:
 				leg_xs = [cx - 5, cx - 2, cx + 1, cx + 4]
 			for i in 4:
@@ -313,22 +326,44 @@ static func _build_horse_and_anchors() -> void:
 					lift = 3 if i % 2 == 0 else 0
 				else:
 					lift = 0 if i % 2 == 0 else 2
+				var far := 1 if (diag and i % 2 == 1) else 0
 				var lc := coat_dark if i % 2 == 1 else coat
-				_rect(img, leg_xs[i] - 1, body_top + 10 - bob, 3, 11 - lift, lc)
-				_rect(img, leg_xs[i] - 1, body_top + 20 - bob - lift, 3, 1, mane)
-			# 身體
-			_rect(img, cx - body_len / 2, body_top - bob, body_len, 11, coat)
-			_rect(img, cx - body_len / 2, body_top + 8 - bob, body_len, 3, coat_dark)
+				var ly: int = body_top + yo.call(leg_xs[i]) - far
+				_rect(img, leg_xs[i] - 1, ly + 10 - bob, 3, 11 - lift, lc)
+				_rect(img, leg_xs[i] - 1, ly + 20 - bob - lift, 3, 1, mane)
+			# 身體（逐欄畫，才能做出近低遠高的傾斜）
+			for x in range(x0, x0 + body_len):
+				var y: int = body_top + yo.call(x) - bob
+				_rect(img, x, y, 1, 11, coat)
+				_rect(img, x, y + 8, 1, 3, coat_dark)
+			# 斜向朝鏡頭：頭端多畫一塊胸口，看得出馬身是朝向斜前方
+			if diag and toward > 0.0:
+				var chest_x := x0 + body_len - 5 if dir > 0 else x0
+				_rect(img, chest_x, body_top + depth - bob + 1, 5, 9, coat)
 			# 鞍
 			var saddle_x := cx - dir * roundi(s * 3.0)
-			_rect(img, saddle_x - 4, body_top - 1 - bob, 8, 4, saddle)
+			_rect(img, saddle_x - 4, body_top - 1 - bob + yo.call(saddle_x), 8, 4, saddle)
 			# 頭頸
 			if s > 0.3:
 				var hx := cx + dir * (body_len / 2 - 1)
-				_rect(img, hx - 2, body_top - 8 - bob, 5, 10, coat)          # 頸
-				_rect(img, hx - 2 + dir * 2, body_top - 10 - bob, 6, 5, coat)  # 頭
-				_rect(img, hx - 3 - (dir * 1), body_top - 9 - bob, 2, 8, mane)  # 鬃
-				_px(img, hx + dir * 4, body_top - 9 - bob, OUTLINE)           # 眼
+				var hy := body_top + depth - bob
+				if diag and toward > 0.0:
+					# 斜前方：頭轉向鏡頭，口鼻較短、位置較低
+					_rect(img, hx - 2, hy - 6, 5, 9, coat)
+					_rect(img, hx - 2 + dir, hy - 8, 5, 6, coat)
+					_rect(img, hx - 3 - dir, hy - 7, 2, 7, mane)
+					_rect(img, hx - 1 + dir * 2, hy - 3, 3, 2, coat_dark)    # 口鼻
+					_px(img, hx + dir * 2, hy - 6, OUTLINE)
+				elif diag:
+					# 斜後方：頭在遠處，較高也較小，主要看到頸背與鬃毛
+					_rect(img, hx - 2, hy - 6, 4, 8, coat)
+					_rect(img, hx - 1 + dir, hy - 8, 4, 4, coat)
+					_rect(img, hx - 2 - dir, hy - 7, 3, 8, mane)
+				else:
+					_rect(img, hx - 2, hy - 8, 5, 10, coat)          # 頸
+					_rect(img, hx - 2 + dir * 2, hy - 10, 6, 5, coat)  # 頭
+					_rect(img, hx - 3 - (dir * 1), hy - 9, 2, 8, mane)  # 鬃
+					_px(img, hx + dir * 4, hy - 9, OUTLINE)           # 眼
 			elif toward >= 0.0:
 				# 面向鏡頭：頭在身體正前方偏下
 				_rect(img, cx - 3, body_top - 9 - bob, 6, 14, coat)
@@ -342,7 +377,7 @@ static func _build_horse_and_anchors() -> void:
 				_rect(img, cx + 1, body_top - 4 - bob, 2, 4, coat)
 			_outline(img, Rect2i(ox, oy, fw, fh))
 			# 鞍座錨點（騎士腰部要對齊的位置），奔馳幀會跟著上下起伏
-			anchors.set_point("saddle", col, row, Vector2(saddle_x - ox, body_top - bob - oy + 1))
+			anchors.set_point("saddle", col, row, Vector2(saddle_x - ox, body_top - bob - oy + 1 + yo.call(saddle_x)))
 	_cache["horse"] = ImageTexture.create_from_image(img)
 	_cache["horse_anchors"] = anchors
 
