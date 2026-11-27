@@ -70,7 +70,7 @@ func _process(delta: float) -> void:
 		yaw += auto_orbit_speed * delta
 		goal = auto_orbit_center
 	elif target:
-		goal = target.global_position
+		goal = target.call("visual_position") if target.has_method("visual_position") else target.global_position
 	_focus = _focus.lerp(goal, 1.0 - exp(-follow_smooth * delta))
 	var look_at_point := _focus + Vector3(0, 1.4, 0)
 	var pitch := deg_to_rad(pitch_deg)

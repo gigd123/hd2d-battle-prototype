@@ -7,10 +7,13 @@ var terrain: BattleTerrain
 var cam_rig: OrbitFollowCamera
 var world_env: WorldEnvironment
 var sun: DirectionalLight3D
+var horse: Horse
+var player: PlayerController
+var hud: BattleHUD
+var debug_draw: DebugDraw
 
-# 階段 0：一個佔位 Sprite 在斜坡上繞圈，檢查漂浮與方向切換
-var _dummy: LayeredActorVisual
-var _dummy_t := 0.0
+## 壓力測試模式：不建立玩家輸入，相機自動繞場
+var stress_mode := false
 
 
 func _ready() -> void:
@@ -27,27 +30,49 @@ func _ready() -> void:
 	cam_rig.terrain = terrain
 	add_child(cam_rig)
 
-	_dummy = LayeredActorVisual.new()
-	_dummy.name = "Dummy"
-	_dummy.setup_main(PlaceholderArt.human_atlas(), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
-	add_child(_dummy)
-	var marker := Node3D.new()
-	marker.name = "DummyFocus"
-	add_child(marker)
-	cam_rig.target = marker
+	_spawn_player_and_horse(Vector3(-30, 0, 0))
+
+	debug_draw = DebugDraw.new()
+	debug_draw.name = "DebugDraw"
+	debug_draw.player = player
+	add_child(debug_draw)
+
+	hud = BattleHUD.new()
+	hud.name = "HUD"
+	hud.player = player
+	add_child(hud)
+
 	apply_postfx()
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if stress_mode:
+		cam_rig.auto_orbit = true
+		cam_rig.distance = 38.0
+		cam_rig.pitch_deg = 40.0
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
-func _process(delta: float) -> void:
-	_dummy_t += delta
-	var r := 10.0
-	var p := Vector3(cos(_dummy_t * 0.3) * r + 18.0, 0, sin(_dummy_t * 0.3) * r)
-	p.y = terrain.get_height(p.x, p.z)
-	var facing := Vector3(-sin(_dummy_t * 0.3), 0, cos(_dummy_t * 0.3))
-	var row := PlaceholderArt.ROW_WALK if int(_dummy_t * 6.0) % 2 == 0 else PlaceholderArt.ROW_IDLE
-	_dummy.update_visual(p, facing, cam_rig.camera, row)
-	(get_node("DummyFocus") as Node3D).global_position = p
+func _spawn_player_and_horse(at: Vector3) -> void:
+	# 馬先加入場景樹：同一物理步中馬先移動，騎手再對齊到馬
+	horse = Horse.new()
+	horse.name = "Horse"
+	horse.terrain = terrain
+	add_child(horse)
+	var hp := at + Vector3(2.5, 0, 0)
+	horse.teleport(Vector3(hp.x, terrain.get_height(hp.x, hp.z) + 0.1, hp.z), PI * 0.5)
+
+	player = PlayerController.new()
+	player.name = "Player"
+	player.terrain = terrain
+	player.horse = horse
+	player.cam_rig = cam_rig
+	player.spawn_point = Vector3(at.x, terrain.get_height(at.x, at.z) + 0.1, at.z)
+	add_child(player)
+	player.global_position = player.spawn_point
+	player.facing = Vector3(1, 0, 0)
+	cam_rig.target = player
+	cam_rig.yaw = -PI * 0.5      # 從玩家背後看向戰場（+X 方向）
+	if stress_mode:
+		player.set_physics_process(false)
 
 
 func _unhandled_input(event: InputEvent) -> void:

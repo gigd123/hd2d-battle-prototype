@@ -35,6 +35,8 @@ func _ready() -> void:
 func _parse_dev_args() -> void:
 	var shot := ""
 	var frames := 180
+	var scenario := ""
+	var shots := ""
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--screenshot="):
 			shot = a.get_slice("=", 1)
@@ -44,6 +46,18 @@ func _parse_dev_args() -> void:
 			soldier_backend = SoldierBackend.MULTIMESH if a.get_slice("=", 1) == "multimesh" else SoldierBackend.SPRITE3D
 		elif a == "--no-postfx":
 			postfx_enabled = false
+		elif a.begins_with("--scenario="):
+			scenario = a.get_slice("=", 1)
+		elif a.begins_with("--shots="):
+			shots = a.get_slice("=", 1)
+		elif a == "--debug-draw":
+			debug_draw = true
+	if scenario != "":
+		var r: Node = load("res://scripts/debug/scenario_runner.gd").new()
+		if shots != "":
+			r.set("shots_dir", shots)
+		r.call("setup", scenario)
+		add_child(r)
 	if shot != "":
 		var n: Node = load("res://scripts/debug/auto_screenshot.gd").new()
 		n.set("path", shot)
