@@ -177,6 +177,9 @@ func _move_on_foot(dir: Vector3, sprint: bool, delta: float) -> void:
 	var spd := run_speed if sprint else walk_speed
 	if attack_phase != AttackPhase.NONE:
 		spd *= 0.4
+	var dl := Vector2(dir.x, dir.z).length()
+	if terrain and dl > 0.1:
+		spd *= terrain.move_factor(global_position.x, global_position.z, dir.x / dl, dir.z / dl)
 	velocity.x = dir.x * spd
 	velocity.z = dir.z * spd
 	if is_on_floor():

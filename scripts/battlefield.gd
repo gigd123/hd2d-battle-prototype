@@ -26,8 +26,10 @@ func _ready() -> void:
 	terrain = BattleTerrain.new()
 	terrain.name = "Terrain"
 	terrain.seed_value = GameConfig.battle_seed
+	terrain.terrain_type = GameConfig.terrain_type
 	add_child(terrain)
 	terrain.build()
+	_apply_terrain_environment()
 
 	cam_rig = OrbitFollowCamera.new()
 	cam_rig.name = "CameraRig"
@@ -75,6 +77,7 @@ func _ready() -> void:
 		cam_rig.pitch_deg = 40.0
 	else:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		hud.toast("場地：%s　%s（F8 換場地／F9 隨機）" % [terrain.type_name(), BattleTerrain.TYPE_HINTS[terrain.terrain_type]], 4.0)
 
 
 func _spawn_player_and_horse(at: Vector3) -> void:
@@ -113,6 +116,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		GameConfig.cycle_direction_mode()
 	elif event.is_action_pressed("toggle_debug"):
 		GameConfig.debug_draw = not GameConfig.debug_draw
+	elif event.is_action_pressed("next_terrain"):
+		GameConfig.next_terrain()
+		get_tree().reload_current_scene()
+	elif event.is_action_pressed("random_terrain"):
+		GameConfig.random_terrain()
+		get_tree().reload_current_scene()
 	elif event.is_action_pressed("toggle_backend"):
 		GameConfig.soldier_backend = 1 - GameConfig.soldier_backend
 		restart_battle()
@@ -209,3 +218,20 @@ func _build_environment() -> void:
 	sun.directional_shadow_max_distance = 120.0
 	sun.rotation_degrees = Vector3(-50, -35, 0)
 	add_child(sun)
+
+
+## 依場地套用天空、霧與陽光
+func _apply_terrain_environment() -> void:
+	var e := terrain.environment_settings()
+	var env := world_env.environment
+	var sky_mat := env.sky.sky_material as ProceduralSkyMaterial
+	sky_mat.sky_top_color = e["sky_top"]
+	sky_mat.sky_horizon_color = e["horizon"]
+	sky_mat.ground_horizon_color = (e["horizon"] as Color).darkened(0.12)
+	env.fog_light_color = e["fog"]
+	env.fog_density = e["fog_density"]
+	env.ambient_light_energy = e["ambient"]
+	sun.light_color = e["sun"]
+	sun.light_energy = e["sun_energy"]
+	# 太陽壓低一點，起伏的明暗比較明顯
+	sun.rotation_degrees = Vector3(-38, -35, 0)

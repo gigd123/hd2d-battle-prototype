@@ -80,6 +80,17 @@ func setup(scenario: String) -> void:
 				[20.5, "tap", "attack"],
 				[22.0, "report", ""], [22.1, "quit", ""],
 			]
+		"terrains":
+			# 場地展示：五種場地輪流，每種俯瞰繞場約 7 秒，雙方開場即衝鋒
+			var keys := BattleTerrain.TYPE_KEYS
+			for k in keys.size():
+				var t0 := k * 7.0
+				if k > 0:
+					steps.append([t0, "terrain", keys[k]])
+				steps.append([t0 + 0.2, "overview", "46"])
+				steps.append([t0 + 0.3, "charge", ""])
+				steps.append([t0 + 6.0, "shot", "terrain_%d_%s" % [k, keys[k]]])
+			steps.append([keys.size() * 7.0, "quit", ""])
 		_:
 			steps = [[0.5, "quit", ""]]
 
@@ -116,6 +127,29 @@ func _run(step: Array) -> void:
 			await get_tree().physics_frame
 			await get_tree().physics_frame
 			Input.action_release(arg)
+		"terrain":
+			GameConfig.terrain_type = BattleTerrain.type_from_key(arg)
+			get_tree().reload_current_scene()
+		"overview":
+			# 俯瞰戰場中央並慢慢繞場
+			var bf := get_tree().current_scene
+			var rig: OrbitFollowCamera = bf.get("cam_rig")
+			var ter: BattleTerrain = bf.get("terrain")
+			rig.auto_orbit = true
+			rig.auto_orbit_center = Vector3(0, ter.get_height(0, 0), 0)
+			rig.auto_orbit_speed = 0.16
+			rig.distance = float(arg)
+			rig.yaw = -PI * 0.5 - 0.6
+			rig.pitch_deg = 22.0
+			# 展示用：只留場地名稱提示
+			var hud: BattleHUD = bf.get("hud")
+			for c in hud.get_children():
+				(c as Label).visible = false
+			hud.toast("場地：%s　%s" % [ter.type_name(), BattleTerrain.TYPE_HINTS[ter.terrain_type]], 6.5)
+		"charge":
+			var bm: BattleManager = get_tree().current_scene.get("battle")
+			bm.issue_order(0, BattleManager.Order.CHARGE, Vector3.ZERO, Vector3.ZERO)
+			bm.issue_order(1, BattleManager.Order.CHARGE, Vector3.ZERO, Vector3.ZERO)
 		"followcam":
 			_follow_cam = true
 		"cam":

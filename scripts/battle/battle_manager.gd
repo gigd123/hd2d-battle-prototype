@@ -38,6 +38,10 @@ const U_NAMES := ["步兵", "弓兵", "騎兵"]
 
 # 弓兵
 const ARCHER_RANGE := 42.0
+## 高地優勢：每高出 1 公尺，射程 +1.5 公尺（上限 +12）、箭傷 +4%（上限 +35%）；低處射高處則相反
+const HIGH_GROUND_RANGE_PER_M := 1.5
+const HIGH_GROUND_RANGE_MAX := 12.0
+const HIGH_GROUND_DMG_PER_M := 0.04
 const ARCHER_MIN_RANGE := 6.0
 const ARROW_GRAVITY := 12.0
 const ARROW_SPEED := 24.0              # 用來估算飛行時間（距離 / 速度）
@@ -105,6 +109,7 @@ var arrow_vel := PackedVector3Array()
 var arrow_team := PackedByteArray()
 var arrow_state := PackedByteArray()    # 0 無、1 飛行中、2 插在地上
 var arrow_life := PackedFloat32Array()
+var arrow_mult := PackedFloat32Array()   # 高地優勢的傷害倍率
 var _arrow_next := 0
 var arrows_in_flight := 0
 
@@ -239,6 +244,8 @@ func _reset_arrows() -> void:
 	arrow_team = PackedByteArray()
 	arrow_state = PackedByteArray()
 	arrow_life = PackedFloat32Array()
+	arrow_mult = PackedFloat32Array()
+	arrow_mult.resize(MAX_ARROWS)
 	arrow_pos.resize(MAX_ARROWS)
 	arrow_vel.resize(MAX_ARROWS)
 	arrow_team.resize(MAX_ARROWS)
@@ -507,7 +514,7 @@ func _think(i: int) -> void:
 
 	var radius := search_radius if order == Order.CHARGE else engage_radius
 	if utype[i] == UnitType.ARCHER:
-		radius = maxf(radius, ARCHER_RANGE)
+		radius = maxf(radius, ARCHER_RANGE + HIGH_GROUND_RANGE_MAX)
 	var best := _find_enemy(i, p, my_team, radius)
 	if best != NO_TARGET:
 		tg = best
@@ -620,7 +627,6 @@ func _move_and_fight(delta: float) -> void:
 		pl_speed = mv.length()
 		pl_fwd = mv / pl_speed if pl_speed > 0.1 else player.facing
 		pl_radius = 1.3 if player.mounted else 0.5
-	var obstacles := terrain.obstacles
 
 	for i in count:
 		if state[i] == State.DEAD:
@@ -664,7 +670,7 @@ func _move_and_fight(delta: float) -> void:
 				face = to / d
 			if ut == UnitType.ARCHER and d > ARCHER_MIN_RANGE:
 				# 弓兵：射程內站定放箭，射程外前進
-				if d > ARCHER_RANGE:
+				if d > archer_range(p.y - tp.y):
 					desired = face * run
 				elif atk_cooldown[i] <= 0.0:
 					atk_anim[i] = 0.6
@@ -745,7 +751,7 @@ func _move_and_fight(delta: float) -> void:
 								cav_speed = v.length()
 					j = _cell_next[j]
 		# 地形障礙（岩石）
-		for ob in obstacles:
+		for ob in terrain.obstacles_near(p.x, p.z):
 			var ox := p.x - ob.x
 			var oz := p.z - ob.y
 			var rr := ob.z + my_r
@@ -782,6 +788,10 @@ func _move_and_fight(delta: float) -> void:
 					var side := 1.0 if lateral >= 0.0 else -1.0
 					desired += Vector3(-pl_fwd.z, 0, pl_fwd.x) * side * 3.5
 
+		# 地形：上坡變慢、下坡稍快，涉水與積雪減速
+		var dl := Vector2(desired.x, desired.z).length()
+		if dl > 0.1:
+			desired *= terrain.move_factor(p.x, p.z, desired.x / dl, desired.z / dl)
 		v = v.lerp(desired, minf(1.0, 8.0 * delta))
 		p.x += (v.x + push.x * 4.0) * delta
 		p.z += (v.z + push.z * 4.0) * delta
@@ -819,6 +829,7 @@ func _fire_arrow(i: int, p: Vector3, tg: int, d: float) -> void:
 	arrow_team[k] = team[i]
 	arrow_state[k] = 1
 	arrow_life[k] = 4.0
+	arrow_mult[k] = 1.0 + clampf((p.y - tp.y) * HIGH_GROUND_DMG_PER_M, -0.15, 0.35)
 	arrow_fired.emit(start)
 
 
@@ -874,12 +885,12 @@ func _update_arrows(delta: float) -> void:
 					break
 		if hit != -1:
 			var flat := Vector3(v.x, 0, v.z).normalized()
-			apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX), flat * 0.25)
+			apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX) * arrow_mult[k], flat * 0.25)
 			arrow_state[k] = 0
 			arrow_hit.emit(p, true)
 			continue
 		if pl_ok and tm != player.team and p.distance_to(pl_center) < pl_r:
-			player.take_damage(ARROW_DAMAGE_PLAYER)
+			player.take_damage(ARROW_DAMAGE_PLAYER * arrow_mult[k])
 			arrow_state[k] = 0
 			arrow_hit.emit(p, true)
 
@@ -887,6 +898,11 @@ func _update_arrows(delta: float) -> void:
 # ---------------------------------------------------------------------------
 # 給玩家武器與馬使用的查詢
 # ---------------------------------------------------------------------------
+## 弓兵有效射程：dh = 射手高度 − 目標高度
+static func archer_range(dh: float) -> float:
+	return ARCHER_RANGE + clampf(dh * HIGH_GROUND_RANGE_PER_M, -6.0, HIGH_GROUND_RANGE_MAX)
+
+
 func soldier_position(i: int) -> Vector3:
 	return pos[i]
 

@@ -82,6 +82,10 @@ func _physics_process(delta: float) -> void:
 		target_speed = (gallop_speed if _sprint else trot_speed) * minf(_desired.length(), 1.0)
 		if absf(diff) > sharp_turn_angle:
 			target_speed = minf(target_speed, trot_speed * 0.4)
+		# 地形：上坡變慢、下坡稍快，涉水與積雪減速（與士兵同一條規則）
+		if terrain:
+			var hf := forward()
+			target_speed *= terrain.move_factor(global_position.x, global_position.z, hf.x, hf.z)
 	var rate := accel if target_speed > speed else brake
 	speed = move_toward(speed, target_speed, rate * delta)
 

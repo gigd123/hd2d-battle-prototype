@@ -28,10 +28,13 @@ var postfx_enabled := true
 var battle_seed := 12345
 ## 除錯繪製（武器掃掠軌跡、小隊目標等）
 var debug_draw := false
+## 場地類型（BattleTerrain.Type）：F8 下一種、F9 隨機；啟動參數 --terrain=plains|hills|forest|river|snow|random
+var terrain_type := 1
 
 
 func _ready() -> void:
 	_setup_input_map()
+	_parse_terrain_arg()
 	_parse_dev_args()
 
 
@@ -125,6 +128,8 @@ func _setup_input_map() -> void:
 	_add_keys("release_mouse", [KEY_ESCAPE])
 	_add_mouse("zoom_in", MOUSE_BUTTON_WHEEL_UP)
 	_add_mouse("zoom_out", MOUSE_BUTTON_WHEEL_DOWN)
+	_add_keys("next_terrain", [KEY_F8])
+	_add_keys("random_terrain", [KEY_F9])
 
 
 func _add_keys(action: StringName, keys: Array) -> void:
@@ -142,3 +147,25 @@ func _add_mouse(action: StringName, button: MouseButton) -> void:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = button
 	InputMap.action_add_event(action, ev)
+
+
+# ---------------------------------------------------------------------------
+# 場地類型
+# ---------------------------------------------------------------------------
+func _parse_terrain_arg() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--terrain="):
+			var key := a.get_slice("=", 1)
+			if key == "random":
+				terrain_type = randi() % BattleTerrain.TYPE_KEYS.size()
+			elif BattleTerrain.type_from_key(key) >= 0:
+				terrain_type = BattleTerrain.type_from_key(key)
+
+
+func next_terrain() -> void:
+	terrain_type = (terrain_type + 1) % BattleTerrain.TYPE_KEYS.size()
+
+
+func random_terrain() -> void:
+	var n := BattleTerrain.TYPE_KEYS.size()
+	terrain_type = (terrain_type + 1 + randi() % (n - 1)) % n
