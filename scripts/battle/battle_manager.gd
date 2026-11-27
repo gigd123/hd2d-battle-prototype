@@ -12,6 +12,9 @@ extends Node3D
 ## - 畫面由 SoldierRenderer 讀取這些陣列繪製；邏輯完全不知道畫面怎麼畫。
 
 signal battle_finished(winner_team: int)
+## 以下訊號只給畫面／音效回饋用
+signal soldier_struck(point: Vector3, landed: bool)          # 士兵之間出手（命中或被擋）
+signal trampled(point: Vector3, speed: float, killed: bool)   # 玩家騎馬撞上敵兵
 
 enum State { IDLE, MOVE, ENGAGE, DEAD }
 enum Order { HOLD, FOLLOW, CHARGE }
@@ -35,6 +38,8 @@ const NO_TARGET := -1
 @export var army_think := 1.5
 @export var corpse_time := 25.0
 @export var cell_size := 3.0
+@export var trample_speed := 5.0        # 騎馬超過此速度（m/s）撞到敵兵會造成衝撞傷害與擊飛
+@export var trample_cooldown := 0.8
 
 # --- 士兵資料（平行陣列）---
 var count := 0
@@ -56,6 +61,7 @@ var stun := PackedFloat32Array()
 var hit_flash := PackedFloat32Array()
 var dead_time := PackedFloat32Array()
 var attackers := PackedInt32Array()     # 每個目標目前被幾人鎖定（每步重算）
+var trample_cd := PackedFloat32Array()  # 被馬撞後的冷卻（避免同一人每步都被撞）
 
 # --- 小隊資料 ---
 var squad_count := 0
@@ -165,6 +171,7 @@ func _clear() -> void:
 	hit_flash = PackedFloat32Array()
 	dead_time = PackedFloat32Array()
 	attackers = PackedInt32Array()
+	trample_cd = PackedFloat32Array()
 	squad_team = PackedByteArray()
 	squad_order = PackedByteArray()
 	squad_anchor = PackedVector3Array()
@@ -212,6 +219,7 @@ func _add_soldier(t: int, sq: int, k: int) -> void:
 	hit_flash.append(0.0)
 	dead_time.append(0.0)
 	attackers.append(0)
+	trample_cd.append(0.0)
 	squad_alive[sq] += 1
 	alive_count[t] += 1
 	count += 1
@@ -552,6 +560,9 @@ func _move_and_fight(delta: float) -> void:
 						player.take_damage(dmg)
 					else:
 						apply_damage(tg, dmg, face * 0.15)
+					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), true)
+				else:
+					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), false)
 
 		# 分離力（網格鄰居）
 		var push := Vector3.ZERO
@@ -587,10 +598,21 @@ func _move_and_fight(delta: float) -> void:
 			var rz := p.z - pl_pos.z
 			var rd2 := rx * rx + rz * rz
 			var min_d := pl_radius + soldier_radius
+			trample_cd[i] = maxf(trample_cd[i] - delta, 0.0)
 			if rd2 < min_d * min_d and rd2 > 0.000001:
 				var rd := sqrt(rd2)
 				push.x += rx / rd * (min_d - rd) * 3.0
 				push.z += rz / rd * (min_d - rd) * 3.0
+				# 衝撞：高速騎馬正面撞上敵兵 → 傷害＋往前擊飛（速度越快越痛、飛越遠）
+				var ahead_d := rx * pl_fwd.x + rz * pl_fwd.z
+				if player.mounted and pl_speed > trample_speed and team[i] != player.team \
+						and trample_cd[i] <= 0.0 and ahead_d > -0.3:
+					trample_cd[i] = trample_cooldown
+					var radial := Vector3(rx / rd, 0, rz / rd)
+					var knock := (pl_fwd * 0.7 + radial * 0.6).normalized() * (0.6 + pl_speed * 0.1)
+					var killed := apply_damage(i, 6.0 + pl_speed * 1.2, knock)
+					v = vel[i]
+					trampled.emit(p + Vector3(0, 1.0, 0), pl_speed, killed)
 			# 只有友軍會讓路；敵軍不閃避（否則衝鋒永遠撞不到人）
 			if team[i] == player.team and pl_speed > 3.0 and rd2 < 25.0:
 				var ahead := rx * pl_fwd.x + rz * pl_fwd.z

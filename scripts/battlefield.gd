@@ -53,7 +53,7 @@ func _ready() -> void:
 		var fx := CombatFX.new()
 		fx.name = "CombatFX"
 		add_child(fx)
-		fx.setup(player, cam_rig)
+		fx.setup(player, cam_rig, battle)
 
 	debug_draw = DebugDraw.new()
 	debug_draw.name = "DebugDraw"

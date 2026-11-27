@@ -17,8 +17,12 @@ extends Node3D
 @export var trail_length := 0.55        # 拖尾覆蓋的揮擊進度長度（0..1）
 @export var trail_samples := 18
 
+@export var shake_trample := 0.5
+@export var clash_max_per_sec := 10.0   # 士兵交戰聲的上限，避免大軍時變成噪音牆
+
 var player: PlayerController
 var cam_rig: OrbitFollowCamera
+var battle: BattleManager
 
 var _trail := ImmediateMesh.new()
 var _trail_mi: MeshInstance3D
@@ -30,11 +34,18 @@ var _spark_i := 0
 var _audio: Array[AudioStreamPlayer] = []
 var _audio_i := 0
 var _numbers: Array = []                # [Label3D, 剩餘秒數, 起點]
+var _audio3d: Array[AudioStreamPlayer3D] = []
+var _audio3d_i := 0
+var _clash_budget := 0.0
 
 
-func setup(p_player: PlayerController, p_cam: OrbitFollowCamera) -> void:
+func setup(p_player: PlayerController, p_cam: OrbitFollowCamera, p_battle: BattleManager = null) -> void:
 	player = p_player
 	cam_rig = p_cam
+	battle = p_battle
+	if battle:
+		battle.soldier_struck.connect(_on_soldier_struck)
+		battle.trampled.connect(_on_trampled)
 	player.swing_started.connect(_on_swing_started)
 	player.hit_detail.connect(_on_hit)
 	player.damaged.connect(_on_damaged)
@@ -61,6 +72,13 @@ func _ready() -> void:
 		a.bus = "Master"
 		add_child(a)
 		_audio.append(a)
+	for i in 10:
+		var a3 := AudioStreamPlayer3D.new()
+		a3.unit_size = 8.0
+		a3.max_distance = 60.0
+		a3.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+		add_child(a3)
+		_audio3d.append(a3)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +87,7 @@ func _process(delta: float) -> void:
 	_update_hitstop(real_dt)
 	_update_trail(real_dt)
 	_update_numbers(real_dt)
+	_clash_budget = minf(_clash_budget + real_dt * clash_max_per_sec, 3.0)
 
 
 func _update_hitstop(real_dt: float) -> void:
@@ -148,6 +167,30 @@ func _on_hit(point: Vector3, damage: float, killed: bool, closing: float) -> voi
 		_play(PlaceholderAudio.hit(), randf_range(0.95, 1.2), -2.0)
 
 
+func _on_trampled(point: Vector3, speed: float, killed: bool) -> void:
+	var strength := clampf(speed / 13.0, 0.0, 1.0)
+	_hitstop(hitstop_hit * (0.8 + strength))
+	if cam_rig:
+		cam_rig.add_shake(shake_trample * (0.6 + strength * 0.6))
+	_burst(point, true)
+	_play(PlaceholderAudio.impact(), randf_range(0.9, 1.1), 0.0)
+	if killed:
+		_spawn_number(point, 0.0, true)
+
+
+func _on_soldier_struck(point: Vector3, landed: bool) -> void:
+	if _clash_budget < 1.0:
+		return
+	_clash_budget -= 1.0
+	var a := _audio3d[_audio3d_i]
+	_audio3d_i = (_audio3d_i + 1) % _audio3d.size()
+	a.global_position = point
+	a.stream = PlaceholderAudio.hit() if landed and randf() < 0.4 else PlaceholderAudio.clang()
+	a.pitch_scale = randf_range(0.85, 1.2)
+	a.volume_db = -10.0
+	a.play()
+
+
 func _on_damaged(_amount: float) -> void:
 	if cam_rig:
 		cam_rig.add_shake(shake_damaged)
@@ -205,7 +248,7 @@ func _burst(at: Vector3, big: bool) -> void:
 
 func _spawn_number(at: Vector3, damage: float, killed: bool) -> void:
 	var l := Label3D.new()
-	l.text = ("%d!" if killed else "%d") % int(damage)
+	l.text = "擊倒！" if damage <= 0.0 else (("%d!" if killed else "%d") % int(damage))
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.no_depth_test = true
 	l.fixed_size = true
