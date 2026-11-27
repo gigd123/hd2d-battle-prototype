@@ -92,7 +92,10 @@ func _spawn_player_and_horse(at: Vector3) -> void:
 	cam_rig.target = player
 	cam_rig.yaw = -PI * 0.5      # 從玩家背後看向戰場（+X 方向）
 	if stress_mode:
-		player.set_physics_process(false)
+		# 壓力測試只量士兵：玩家與馬隱藏且不更新
+		for n: Node3D in [player, horse]:
+			n.visible = false
+			n.process_mode = Node.PROCESS_MODE_DISABLED
 
 
 func _unhandled_input(event: InputEvent) -> void:
