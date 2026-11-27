@@ -261,6 +261,10 @@ var _center_timer := 0.0
 
 
 func _process(delta: float) -> void:
+	# 遮擋淡化：玩家（或騎乘中的馬上騎士）被樹、岩石擋住時，擋住的部分變成點陣半透明
+	if terrain and player and not stress_mode:
+		var vp: Vector3 = horse.visual_position() if player.mounted else player.visual_position()
+		terrain.set_occlusion_target(vp + Vector3(0, 1.9 if player.mounted else 1.0, 0))
 	# 觀戰中每半秒更新一次繞場中心，相機會平滑地跟著戰線移動
 	if cam_rig and cam_rig.spectating and not stress_mode:
 		_center_timer -= delta

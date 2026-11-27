@@ -37,6 +37,8 @@ var _numbers: Array = []                # [Label3D, 剩餘秒數, 起點]
 var _audio3d: Array[AudioStreamPlayer3D] = []
 var _audio3d_i := 0
 var _clash_budget := 0.0
+var _vignette: ColorRect
+var _vignette_a := 0.0
 
 
 func setup(p_player: PlayerController, p_cam: OrbitFollowCamera, p_battle: BattleManager = null) -> void:
@@ -68,6 +70,7 @@ func _ready() -> void:
 	mat.no_depth_test = false
 	_trail_mi.material_override = mat
 	add_child(_trail_mi)
+	_build_vignette()
 	for i in 8:
 		_sparks.append(_make_sparks())
 	for i in 6:
@@ -91,6 +94,10 @@ func _process(delta: float) -> void:
 	_update_trail(real_dt)
 	_update_numbers(real_dt)
 	_clash_budget = minf(_clash_budget + real_dt * clash_max_per_sec, 3.0)
+	_vignette_a = maxf(0.0, _vignette_a - real_dt * 2.2)
+	if _vignette:
+		_vignette.visible = _vignette_a > 0.001
+		(_vignette.material as ShaderMaterial).set_shader_parameter("strength", _vignette_a)
 
 
 func _update_hitstop(real_dt: float) -> void:
@@ -206,9 +213,43 @@ func _play3d(point: Vector3, stream: AudioStream, pitch: float, db: float, impor
 	a.play()
 
 
-func _on_damaged(_amount: float) -> void:
+## 玩家受擊：鏡頭震動、短暫停頓、受傷音效、畫面邊緣泛紅、紅色傷害數字（閃紅與擊退在玩家身上）
+func _on_damaged(amount: float) -> void:
+	var k := clampf(amount / 15.0, 0.5, 1.5)
 	if cam_rig:
-		cam_rig.add_shake(shake_damaged)
+		cam_rig.add_shake(shake_damaged * k + 0.1)
+	_hitstop(0.035 * k)
+	_play(PlaceholderAudio.hurt(), randf_range(0.92, 1.08), -1.0)
+	_vignette_a = minf(1.0, _vignette_a + 0.45 * k)
+	if player:
+		var at := player.body_center() + Vector3(0, 0.6, 0)
+		_spawn_number(at, amount, false)
+		var lbl: Label3D = _numbers[-1][0]
+		lbl.modulate = Color(1.0, 0.2, 0.2)
+		lbl.font_size = 22
+
+
+func _build_vignette() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 5
+	add_child(layer)
+	_vignette = ColorRect.new()
+	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sh := Shader.new()
+	sh.code = """shader_type canvas_item;
+uniform float strength = 0.0;
+void fragment() {
+	vec2 d = UV - 0.5;
+	float r = length(d * vec2(1.0, 0.75)) * 2.0;
+	float a = smoothstep(0.55, 1.15, r) * strength * 0.75;
+	COLOR = vec4(0.75, 0.0, 0.0, a);
+}"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	_vignette.material = mat
+	_vignette.visible = false
+	layer.add_child(_vignette)
 
 
 # ---------------------------------------------------------------------------

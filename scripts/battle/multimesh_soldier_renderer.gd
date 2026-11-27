@@ -43,6 +43,7 @@ func _create(bm: BattleManager) -> void:
 		mat.set_shader_parameter("atlas", art.shader_atlas())
 		mat.set_shader_parameter("grid", Vector2(8, art.rows))
 		mat.set_shader_parameter("alpha_team_mask", art.baked)
+		mat.set_shader_parameter("pitch_comp", GameConfig.pitch_compensation)
 		quad.material = mat
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D

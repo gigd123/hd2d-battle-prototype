@@ -80,6 +80,22 @@ func setup(scenario: String) -> void:
 				[20.5, "tap", "attack"],
 				[22.0, "report", ""], [22.1, "quit", ""],
 			]
+		"feedback":
+			# 試玩回饋修正展示：邊打邊退、受擊反應、遮擋淡化、俯視比例與行軍、雪地騎馬貼地
+			steps = [
+				[0.0, "camp", "10,28"], [0.3, "hold", "move_back"],
+				[0.5, "tap", "attack"], [1.0, "shot", "f01_back_attack"], [1.2, "tap", "attack"], [1.9, "tap", "attack"],
+				[2.7, "release", "move_back"],
+				[3.0, "hurt", "16"], [3.08, "shot", "f02_hurt"], [3.7, "hurt", "12"], [4.5, "hurt", "20"],
+				[5.4, "occlude", ""], [6.2, "shot", "f03_occlusion"], [6.4, "hold", "move_left"], [7.6, "release", "move_left"],
+				[8.0, "shot", "f03b_out_of_tree"],
+				[8.5, "tap", "order_follow"], [8.6, "camp", "24,62"], [9.0, "hold", "move_forward"],
+				[12.5, "shot", "f04_topdown_march"], [14.0, "release", "move_forward"],
+				[14.5, "terrain", "snow"], [14.8, "camp", "8,14"], [15.0, "tap", "interact"], [15.6, "followcam", ""],
+				[15.8, "hold", "move_left"], [16.4, "hold", "sprint"],
+				[19.0, "release", "sprint"], [19.5, "shot", "f05_horse_snow"], [20.5, "release", "move_left"],
+				[21.8, "shot", "f06_horse_snow_stop"], [22.3, "quit", ""],
+			]
 		"cavalry":
 			# 騎兵特寫：我軍右翼騎兵迎面衝向鏡頭，看馬的朝向與轉彎
 			steps = [
@@ -158,6 +174,31 @@ func _run(step: Array) -> void:
 			for c in hud.get_children():
 				(c as Label).visible = false
 			hud.toast("場地：%s　%s" % [ter.type_name(), BattleTerrain.TYPE_HINTS[ter.terrain_type]], 6.5)
+		"camp":
+			# 參數：距離, 俯角
+			var cv := arg.split(",")
+			var crig: OrbitFollowCamera = get_tree().current_scene.get("cam_rig")
+			crig.distance = float(cv[0])
+			crig.pitch_deg = float(cv[1])
+		"hurt":
+			# 從玩家正前方 2 公尺處打玩家一下
+			var hp_pl: PlayerController = get_tree().current_scene.get("player")
+			hp_pl.take_damage(float(arg), hp_pl.global_position + hp_pl.facing * 2.0)
+		"occlude":
+			# 把玩家移到最近一棵林中樹的正後方（從鏡頭看過去被樹擋住）
+			var obf := get_tree().current_scene
+			var opl: PlayerController = obf.get("player")
+			var oter: BattleTerrain = obf.get("terrain")
+			var orig: OrbitFollowCamera = obf.get("cam_rig")
+			var best := Vector3.INF
+			for ob in oter.obstacles:
+				if absf(ob.z - 0.6) < 0.01 and Vector2(ob.x, ob.y).distance_to(Vector2(opl.global_position.x, opl.global_position.z)) < Vector2(best.x, best.y).distance_to(Vector2(opl.global_position.x, opl.global_position.z)):
+					best = ob
+			if best != Vector3.INF:
+				var np := Vector3(best.x, 0, best.y) + orig.flat_forward() * 1.6
+				np.y = oter.get_height(np.x, np.z) + 0.05
+				opl.global_position = np
+				opl.velocity = Vector3.ZERO
 		"overview_at":
 			# 參數：中心 x, z, 距離, yaw
 			var v := arg.split(",")

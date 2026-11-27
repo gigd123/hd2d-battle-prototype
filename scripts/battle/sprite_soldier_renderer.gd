@@ -5,10 +5,12 @@ extends SoldierRenderer
 
 var _sprites: Array[Sprite3D] = []
 var _mode := BaseMaterial3D.BILLBOARD_FIXED_Y
+var _stretch := Vector3.ONE
 
 
 func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 	_mode = GameConfig.billboard_mode()
+	_stretch = Vector3(1.0, GameConfig.billboard_stretch(cam), 1.0)
 	super.render(bm, cam, frac)
 
 
@@ -35,6 +37,7 @@ func _draw_soldier(i: int, p: Vector3, frame: int, flip: bool, flash: float, dar
 	if s.billboard != _mode:
 		s.billboard = _mode
 	s.position = p
+	s.scale = _stretch
 	s.frame = frame
 	s.flip_h = flip
 	if flash > 0.0:

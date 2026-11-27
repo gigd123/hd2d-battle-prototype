@@ -10,6 +10,8 @@ uniform vec2 grid = vec2(8.0, 4.0);
 uniform bool full_billboard = false;
 // 預渲染圖：陣營色遮罩編在透明度（約 0.75 = 這個像素乘上陣營色，保留原本明暗）
 uniform bool alpha_team_mask = false;
+// 俯角補償：相機越往下看，Y 軸 Billboard 越扁，依俯角把高度拉長（腳底不動）。0 = 關
+uniform float pitch_comp = 0.85;
 
 varying vec4 v_color;
 varying vec2 v_fx;
@@ -21,7 +23,9 @@ void vertex() {
 		world = origin + INV_VIEW_MATRIX[0].xyz * VERTEX.x + INV_VIEW_MATRIX[1].xyz * VERTEX.y;
 	} else {
 		vec3 cam_right = normalize(vec3(INV_VIEW_MATRIX[0].x, 0.0, INV_VIEW_MATRIX[0].z));
-		world = origin + cam_right * VERTEX.x + vec3(0.0, VERTEX.y, 0.0);
+		float cos_p = length(vec2(INV_VIEW_MATRIX[2].x, INV_VIEW_MATRIX[2].z));
+		float stretch = mix(1.0, 1.0 / max(cos_p, 0.5), pitch_comp);
+		world = origin + cam_right * VERTEX.x + vec3(0.0, VERTEX.y * stretch, 0.0);
 	}
 	VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
 	NORMAL = vec3(0.0, 0.0, 1.0);

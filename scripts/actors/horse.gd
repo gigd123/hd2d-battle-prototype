@@ -134,7 +134,18 @@ func _physics_process(delta: float) -> void:
 
 ## 物理步之間的內插位置（畫面用，避免高刷新率下抖動）
 func visual_position() -> Vector3:
-	return _prev_pos.lerp(_cur_pos, Engine.get_physics_interpolation_fraction())
+	var p := _prev_pos.lerp(_cur_pos, Engine.get_physics_interpolation_fraction())
+	# 碰撞膠囊是橫躺的，物理原點會比地面低一點；畫面改用地形高度：前後蹄位置取平均與中心取較高者，
+	# 斜坡上馬腳不會陷進地面
+	if terrain:
+		var f := forward()
+		var hc := terrain.get_height(p.x, p.z)
+		var hf := terrain.get_height(p.x + f.x * 0.9, p.z + f.z * 0.9)
+		var hb := terrain.get_height(p.x - f.x * 0.9, p.z - f.z * 0.9)
+		var ground := maxf(hc, (hf + hb) * 0.5) + 0.04
+		if p.y < ground + 0.6:          # 在地面附近（不是跳起或掉落中）才貼地
+			p.y = ground
+	return p
 
 
 func anim_row() -> int:

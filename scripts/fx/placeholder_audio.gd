@@ -73,6 +73,22 @@ static func kill() -> AudioStreamWAV:
 	return _cache["kill"]
 
 
+## 玩家受傷聲：悶重的鈍擊＋短促帶顫音的「呃」（低頻方波感），跟砍中敵人的聲音明顯不同。
+static func hurt() -> AudioStreamWAV:
+	if not _cache.has("hurt"):
+		var n := int(RATE * 0.3)
+		var data := PackedFloat32Array()
+		data.resize(n)
+		for i in n:
+			var t := float(i) / RATE
+			var f := lerpf(210.0, 120.0, t / 0.3) * (1.0 + 0.04 * sin(TAU * 28.0 * t))
+			var tone := clampf(sin(TAU * f * t) * 2.5, -1.0, 1.0)
+			var env := minf(t / 0.015, 1.0) * exp(-9.0 * t)
+			data[i] = tone * env * 0.45
+		_cache["hurt"] = _make(_mix(_thump_data(0.2, 120.0, 45.0, 0.0, 1.0), data, 0.8))
+	return _cache["hurt"]
+
+
 ## 放箭聲：撥弦（快速衰減的低音加泛音）＋箭離弦的短促氣音。
 static func bow() -> AudioStreamWAV:
 	if not _cache.has("bow"):
