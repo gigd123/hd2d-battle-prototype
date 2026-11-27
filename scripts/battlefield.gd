@@ -141,6 +141,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("toggle_billboard"):
 		GameConfig.full_billboard = not GameConfig.full_billboard
 		hud.toast("Billboard：" + ("完全面向相機" if GameConfig.full_billboard else "Y 軸直立"))
+	elif event.is_action_pressed("toggle_art"):
+		GameConfig.toggle_art_mode()
+		restart_battle()
+		hud.toast("角色美術：" + GameConfig.art_mode_name())
 	elif event.is_action_pressed("toggle_postfx"):
 		GameConfig.postfx_enabled = not GameConfig.postfx_enabled
 		apply_postfx()

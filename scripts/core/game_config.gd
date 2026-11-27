@@ -5,6 +5,7 @@ extends Node
 ## 例如方向數：架構上限是 8 方向，可在執行期切換成 4 方向或「5 方向＋鏡像」比較。
 
 signal direction_mode_changed
+signal art_mode_changed
 
 ## 方向模式：
 ## - DIR_8：8 張方向圖（S, SE, E, NE, N, NW, W, SW）
@@ -15,10 +16,15 @@ enum DirectionMode { DIR_8, DIR_8_MIRROR, DIR_4 }
 ## 士兵畫面後端（視覺代理的兩種實作）
 enum SoldierBackend { SPRITE3D, MULTIMESH }
 
+## 角色美術來源：預渲染（tools/sprite_baker 烘焙出的 art/baked/*）或程式佔位圖
+enum ArtMode { BAKED, PLACEHOLDER }
+
 const MAX_DIRECTIONS := 8
 
 var direction_mode: int = DirectionMode.DIR_8
 var soldier_backend: int = SoldierBackend.SPRITE3D
+## 預設用預渲染圖；找不到 art/baked/ 的檔案時各角色會自動退回佔位圖。F7 切換。
+var art_mode: int = ArtMode.BAKED
 ## Billboard 方式：false = Y 軸（直立紙片，報告建議的起點）；true = 完全面向相機。
 ## 相機俯角大時，Y 軸 Billboard 在畫面邊緣會有透視傾斜；兩種都保留，F6 切換比較。
 var full_billboard := false
@@ -60,6 +66,8 @@ func _parse_dev_args() -> void:
 			full_billboard = true
 		elif a == "--debug-draw":
 			debug_draw = true
+		elif a.begins_with("--art="):
+			art_mode = ArtMode.PLACEHOLDER if a.get_slice("=", 1) == "placeholder" else ArtMode.BAKED
 	if scenario != "":
 		var r: Node = load("res://scripts/debug/scenario_runner.gd").new()
 		if shots != "":
@@ -96,6 +104,22 @@ func cycle_direction_mode() -> void:
 	direction_mode_changed.emit()
 
 
+## 目前美術模式下的預渲染圖集；佔位圖模式或檔案不存在時回傳 null
+func baked_set(set_name: String) -> BakedSpriteSet:
+	if art_mode != ArtMode.BAKED:
+		return null
+	return BakedSpriteSet.get_set(set_name)
+
+
+func toggle_art_mode() -> void:
+	art_mode = ArtMode.PLACEHOLDER if art_mode == ArtMode.BAKED else ArtMode.BAKED
+	art_mode_changed.emit()
+
+
+func art_mode_name() -> String:
+	return "預渲染 3D 像素圖" if art_mode == ArtMode.BAKED else "程式佔位圖"
+
+
 func billboard_mode() -> BaseMaterial3D.BillboardMode:
 	return BaseMaterial3D.BILLBOARD_ENABLED if full_billboard else BaseMaterial3D.BILLBOARD_FIXED_Y
 
@@ -124,6 +148,7 @@ func _setup_input_map() -> void:
 	_add_keys("toggle_backend", [KEY_F4])
 	_add_keys("toggle_postfx", [KEY_F5])
 	_add_keys("toggle_billboard", [KEY_F6])
+	_add_keys("toggle_art", [KEY_F7])
 	_add_keys("restart_battle", [KEY_R])
 	_add_keys("release_mouse", [KEY_ESCAPE])
 	_add_mouse("zoom_in", MOUSE_BUTTON_WHEEL_UP)

@@ -31,14 +31,18 @@ func _create(bm: BattleManager) -> void:
 		counts[ut] += 1
 	var shader: Shader = load("res://shaders/soldier_billboard.gdshader")
 	for ut in 3:
-		var frame := PlaceholderArt.unit_frame(ut)
+		var art: SoldierArt = _arts[ut]
+		var frame := art.frame
 		var quad := QuadMesh.new()
-		quad.size = Vector2(frame) * PlaceholderArt.PIXEL_SIZE
-		quad.center_offset = Vector3(0, quad.size.y * 0.5, 0)
+		quad.size = Vector2(frame) * art.pixel_size
+		# 原點（腳底）不一定在幀底部：預渲染圖腳下有留邊
+		var below := (frame.y - art.origin.y) * art.pixel_size if art.origin.x >= 0.0 else 0.0
+		quad.center_offset = Vector3(0, quad.size.y * 0.5 - below, 0)
 		var mat := ShaderMaterial.new()
 		mat.shader = shader
-		mat.set_shader_parameter("atlas", PlaceholderArt.unit_atlas(ut))
-		mat.set_shader_parameter("grid", Vector2(8, PlaceholderArt.unit_rows(ut)))
+		mat.set_shader_parameter("atlas", art.shader_atlas())
+		mat.set_shader_parameter("grid", Vector2(8, art.rows))
+		mat.set_shader_parameter("alpha_team_mask", art.baked)
 		quad.material = mat
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D

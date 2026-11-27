@@ -18,8 +18,9 @@ func _create(bm: BattleManager) -> void:
 	_sprites.clear()
 	for i in bm.count:
 		var ut := bm.utype[i]
-		var tex := PlaceholderArt.unit_atlas_tinted(ut, TEAM_COLORS[bm.team[i]])
-		var s := LayeredActorVisual.make_sprite(tex, PlaceholderArt.unit_frame(ut), PlaceholderArt.unit_rows(ut))
+		var art: SoldierArt = _arts[ut]
+		var tex := art.tinted_texture(TEAM_COLORS[bm.team[i]])
+		var s := LayeredActorVisual.make_sprite(tex, art.frame, art.rows, art.pixel_size, art.origin)
 		s.name = "Soldier%d" % i
 		add_child(s)
 		_sprites.append(s)

@@ -23,6 +23,8 @@ var rider: Node3D = null
 var terrain: BattleTerrain
 var battle: Node = null                # BattleManager（階段 2 起）
 var visual: LayeredActorVisual
+const CLOTH_TINT := Color(0.25, 0.45, 0.85)
+var _baked: BakedSpriteSet = null
 
 var _desired := Vector3.ZERO
 var _sprint := false
@@ -43,13 +45,28 @@ func _ready() -> void:
 	cs.rotation_degrees = Vector3(90, 0, 0)   # 橫躺的膠囊，沿馬身前後方向
 	cs.position = Vector3(0, 0.95, 0)          # 原點在蹄底
 	add_child(cs)
-	visual = LayeredActorVisual.new()
-	visual.name = "HorseVisual"
-	visual.setup_main(PlaceholderArt.horse_atlas(), PlaceholderArt.HORSE_FRAME, PlaceholderArt.HORSE_ROWS, PlaceholderArt.horse_anchors(), 2.4)
-	visual.setup_attach(PlaceholderArt.rider_atlas(), PlaceholderArt.RIDER_FRAME, PlaceholderArt.RIDER_ROWS, PlaceholderArt.rider_anchors(), "saddle", "seat")
-	add_child(visual)
+	_build_visual()
+	GameConfig.art_mode_changed.connect(_build_visual)
 	_prev_pos = global_position
 	_cur_pos = global_position
+
+
+## 建立（或重建）畫面：預渲染的馬＋騎士（身體、劍兩層），騎士的 seat 錨點對齊馬的 saddle 錨點
+func _build_visual() -> void:
+	if visual:
+		visual.queue_free()
+	visual = LayeredActorVisual.new()
+	visual.name = "HorseVisual"
+	_baked = GameConfig.baked_set("horse")
+	var rider_set := GameConfig.baked_set("knight")
+	if _baked and rider_set:
+		visual.setup_main_baked(_baked, ["horse"], CLOTH_TINT, 2.4)
+		visual.setup_attach_baked(rider_set, ["body", "sword"], "saddle", "seat", CLOTH_TINT)
+	else:
+		_baked = null
+		visual.setup_main(PlaceholderArt.horse_atlas(), PlaceholderArt.HORSE_FRAME, PlaceholderArt.HORSE_ROWS, PlaceholderArt.horse_anchors(), 2.4)
+		visual.setup_attach(PlaceholderArt.rider_atlas(), PlaceholderArt.RIDER_FRAME, PlaceholderArt.RIDER_ROWS, PlaceholderArt.rider_anchors(), "saddle", "seat")
+	add_child(visual)
 
 
 func forward() -> Vector3:
@@ -121,6 +138,12 @@ func visual_position() -> Vector3:
 
 
 func anim_row() -> int:
+	if _baked:
+		if speed < 0.6:
+			return _baked.row_at_time("idle", Time.get_ticks_msec() / 1000.0)
+		if speed < (trot_speed + gallop_speed) * 0.5:
+			return _baked.row_at_progress("trot", fmod(_stride / 2.2, 1.0))
+		return _baked.row_at_progress("gallop", fmod(_stride / 3.6, 1.0))
 	if speed < 0.6:
 		return 0
 	return int(_stride / 1.4) % 2

@@ -1,0 +1,37 @@
+{
+  "name": "knight",
+  "source": "builtin:knight",
+  "frame_size": [88, 88],
+  "pixel_size": 0.045,
+  "pitch_deg": 30,
+  "supersample": 4,
+  "bottom_margin": 16,
+  "forward": "+Z",
+  "outline": true,
+  "color_levels": 24,
+  "layers": [
+    {"name": "body", "include": ["*"], "exclude": ["Sword*", "Spear*"], "team": ["*Team*"]},
+    {"name": "sword", "include": ["Sword*"]},
+    {"name": "spear", "include": ["Spear*"], "default_visible": false}
+  ],
+  "anchors": {
+    "seat": "Seat",
+    "hand_r": "HandR",
+    "weapon_tip": "WeaponTip",
+    "head": "HeadTop"
+  },
+  "actions": [
+    {"name": "idle", "frames": 2, "fps": 2, "loop": true},
+    {"name": "walk", "frames": 6, "fps": 8, "loop": true},
+    {"name": "run", "frames": 6, "fps": 11, "loop": true},
+    {"name": "attack_a", "frames": 6, "fps": 12, "loop": false},
+    {"name": "attack_b", "frames": 6, "fps": 12, "loop": false},
+    {"name": "death", "frames": 4, "fps": 8, "loop": false},
+    {"name": "ride_idle", "frames": 2, "fps": 2, "loop": true},
+    {"name": "ride_attack_a", "frames": 6, "fps": 12, "loop": false},
+    {"name": "ride_attack_b", "frames": 6, "fps": 12, "loop": false}
+  ],
+  "holdouts": [
+    {"source": "builtin:horse", "anim": "idle", "time": 0.0, "align": ["Seat", "Saddle"], "actions": ["ride_*"]}
+  ]
+}
