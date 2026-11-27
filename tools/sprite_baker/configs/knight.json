@@ -29,7 +29,16 @@
     {"name": "death", "frames": 4, "fps": 8, "loop": false},
     {"name": "ride_idle", "frames": 2, "fps": 2, "loop": true},
     {"name": "ride_attack_a", "frames": 6, "fps": 12, "loop": false},
-    {"name": "ride_attack_b", "frames": 6, "fps": 12, "loop": false}
+    {"name": "ride_attack_b", "frames": 6, "fps": 12, "loop": false},
+    {"name": "walk_attack_a", "frames": 6, "fps": 12, "loop": false},
+    {"name": "walk_attack_b", "frames": 6, "fps": 12, "loop": false},
+    {"name": "thrust", "frames": 6, "fps": 12, "loop": false},
+    {"name": "walk_thrust", "frames": 6, "fps": 12, "loop": false},
+    {"name": "block", "frames": 2, "fps": 2, "loop": true},
+    {"name": "walk_block", "frames": 6, "fps": 8, "loop": true},
+    {"name": "hurt", "frames": 3, "fps": 10, "loop": false},
+    {"name": "ride_block", "frames": 2, "fps": 2, "loop": true},
+    {"name": "ride_thrust", "frames": 6, "fps": 12, "loop": false}
   ],
   "holdouts": [
     {"source": "builtin:horse", "anim": "idle", "time": 0.0, "align": ["Seat", "Saddle"], "actions": ["ride_*"]}

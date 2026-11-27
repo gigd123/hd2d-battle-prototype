@@ -8,7 +8,7 @@ extends RefCounted
 ##   步兵 = 身體＋長槍、弓兵 = 身體＋劍（原型還沒有弓的模型）、
 ##   騎兵 = 馬＋騎士（依每格錨點把騎士的 seat 貼到馬的 saddle 上）。
 
-enum Kind { IDLE, WALK, RUN, ATTACK, DEAD }
+enum Kind { IDLE, WALK, RUN, ATTACK, DEAD, WALK_ATTACK }
 
 const CAV_TOP_PAD := 40           # 騎兵合成圖在馬的幀上方多留的高度（騎士上半身與舉劍）
 
@@ -81,7 +81,7 @@ func row_for(kind: int, t: float, progress: float, speed: float) -> int:
 		match kind:
 			Kind.DEAD:
 				return PlaceholderArt.ROW_DEAD
-			Kind.ATTACK:
+			Kind.ATTACK, Kind.WALK_ATTACK:
 				return PlaceholderArt.ROW_ATTACK if progress > 0.44 else PlaceholderArt.ROW_IDLE
 			Kind.WALK, Kind.RUN:
 				var rate := 9.0 if unit == PlaceholderArt.Unit.CAVALRY else 5.0
@@ -92,6 +92,8 @@ func row_for(kind: int, t: float, progress: float, speed: float) -> int:
 			return _row("death", t, -1.0)
 		Kind.ATTACK:
 			return _row("attack", 0.0, progress)
+		Kind.WALK_ATTACK:
+			return _row("walk_attack" if actions.has("walk_attack") else "attack", 0.0, progress)
 		Kind.RUN:
 			return _row("run", t * maxf(0.6, speed / 4.0), -1.0)
 		Kind.WALK:
@@ -146,8 +148,14 @@ func _compose_foot(bs: BakedSpriteSet, weapon: String) -> void:
 	frame = bs.frame_size
 	pixel_size = bs.pixel_size
 	origin = bs.origin
-	var pick := ["idle", "walk", "run", "attack_a", "death"]
+	# 邊走邊攻擊：下半身繼續走路、上半身出手（步兵拿長槍用刺擊，弓兵拿劍用揮砍）
+	var atk := "thrust" if weapon == "spear" and bs.has_action("thrust") else "attack_a"
+	var watk := "walk_thrust" if weapon == "spear" else "walk_attack_a"
+	var pick := ["idle", "walk", "run", atk, "death"]
 	var names := ["idle", "walk", "run", "attack", "death"]
+	if bs.has_action(watk):
+		pick.append(watk)
+		names.append("walk_attack")
 	var total := 0
 	for n in pick:
 		total += int(bs.actions[n]["frames"])
@@ -188,7 +196,8 @@ func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet) -> void:
 	var gallop: Dictionary = horse.actions["gallop"]
 	var h_idle: Dictionary = horse.actions["idle"]
 	var r_idle: Dictionary = knight.actions["ride_idle"]
-	var r_atk: Dictionary = knight.actions["ride_attack_a"]
+	var r_atk: Dictionary = knight.actions["ride_thrust" if knight.has_layer("spear") and knight.has_action("ride_thrust") else "ride_attack_a"]
+	var trot: Dictionary = horse.actions.get("trot", gallop)
 	var death: Dictionary = knight.actions["death"]
 	# 每列 = [馬的列, 騎士的列 或 -1, 只畫騎士倒地]
 	var plan: Array = []
@@ -196,12 +205,19 @@ func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet) -> void:
 	actions["run"] = [0, gf, float(gallop["fps"]), true]
 	for f in gf:
 		plan.append([int(gallop["row"]) + f, int(r_idle["row"]) + (f % int(r_idle["frames"])), false])
-	actions["walk"] = actions["run"]
+	var tf := int(trot["frames"])
+	actions["walk"] = [plan.size(), tf, float(trot["fps"]), true]
+	for f in tf:
+		plan.append([int(trot["row"]) + f, int(r_idle["row"]) + (f % int(r_idle["frames"])), false])
+	# 攻擊兩種：移動中（馬繼續跑）與原地（馬站著），騎士動作一樣
 	var af := int(r_atk["frames"])
-	actions["attack"] = [plan.size(), af, float(r_atk["fps"]), false]
+	actions["walk_attack"] = [plan.size(), af, float(r_atk["fps"]), false]
 	for f in af:
 		plan.append([int(gallop["row"]) + (f % gf), int(r_atk["row"]) + f, false])
 	var hf := int(h_idle["frames"])
+	actions["attack"] = [plan.size(), af, float(r_atk["fps"]), false]
+	for f in af:
+		plan.append([int(h_idle["row"]) + (f % hf), int(r_atk["row"]) + f, false])
 	actions["idle"] = [plan.size(), hf, float(h_idle["fps"]), true]
 	for f in hf:
 		plan.append([int(h_idle["row"]) + f, int(r_idle["row"]) + (f % int(r_idle["frames"])), false])

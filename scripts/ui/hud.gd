@@ -17,7 +17,7 @@ func _ready() -> void:
 	_help.anchor_bottom = 1.0
 	_help.offset_top = -215
 	_help.text = "\n".join([
-		"WASD 移動　Shift 奔跑/奔馳　E 上馬/下馬　左鍵/空白 揮擊",
+		"WASD 移動　Shift 奔跑/奔馳　E 上馬/下馬　左鍵/空白 攻擊　右鍵/C 舉盾　Q 換武器（劍⇄長槍）",
 		"滑鼠 旋轉相機　滾輪 縮放　Esc 釋放滑鼠",
 		"1 全軍衝鋒　2 在此集結（守位）　3 跟隨我",
 		"R 重開戰局　F2 切換方向數　F3 除錯繪製　F4 士兵畫面後端　F5 後製效果　F6 Billboard 方式",
@@ -65,7 +65,9 @@ func _process(delta: float) -> void:
 		if player.dead:
 			state = "倒地（數秒後重生）"
 		var spd := player.move_velocity().length()
-		lines.append("玩家：%s　生命 %d/%d　速度 %.1f m/s　擊殺 %d" % [state, player.hp, player.max_hp, spd, player.total_kills])
+		if player.blocking:
+			state += "・舉盾"
+		lines.append("玩家：%s　武器 %s　生命 %d/%d　速度 %.1f m/s　擊殺 %d" % [state, PlayerController.WEAPON_NAMES[player.weapon], player.hp, player.max_hp, spd, player.total_kills])
 		if not player.mounted and player.horse and player.global_position.distance_to(player.horse.global_position) < player.mount_range:
 			lines.append("按 E 上馬")
 	_info.text = "\n".join(lines)

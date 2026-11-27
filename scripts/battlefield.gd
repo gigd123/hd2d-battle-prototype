@@ -50,6 +50,7 @@ func _ready() -> void:
 		horse.battle = battle
 		player.battle = battle
 		player.hit_landed.connect(_on_hit_landed)
+		player.weapon_changed.connect(func(n: String): hud.toast("武器：" + n + ("（攻擊距離較遠，太貼近會卡住）" if n == "長槍" else "（揮砍，貼身也好用）"), 2.0))
 
 	if not stress_mode:
 		var fx := CombatFX.new()

@@ -10,11 +10,16 @@ signal died
 signal swing_started(mounted: bool)
 signal hit_detail(point: Vector3, damage: float, killed: bool, closing_speed: float)
 signal damaged(amount: float)
+signal blocked(point: Vector3)             # 舉盾擋下攻擊
+signal weapon_stuck(point: Vector3)        # 長槍貼身刺不出去
+signal weapon_changed(weapon_name: String)
 
 enum AttackPhase { NONE, WINDUP, SWING, RECOVER }
+enum Weapon { SWORD, SPEAR }
+const WEAPON_NAMES := ["劍", "長槍"]
 
-@export var walk_speed := 3.8
-@export var run_speed := 6.5
+@export var walk_speed := 4.4
+@export var run_speed := 7.6
 @export var gravity := 25.0
 @export var max_hp := 250.0
 @export var mount_range := 3.0
@@ -29,6 +34,21 @@ enum AttackPhase { NONE, WINDUP, SWING, RECOVER }
 @export var base_damage := 22.0
 @export var speed_damage := 3.0       # 每 m/s 相對速度加成
 @export var blade_radius := 0.15
+# 長槍：攻擊距離較遠，但敵人貼太近時刺不出去（「卡住」：傷害大減、動作被打斷）
+@export var spear_reach_foot := 2.7
+@export var spear_reach_mounted := 3.3
+@export var spear_min_dist := 1.1      # 比這更近的目標算貼身
+@export var spear_stuck_damage := 0.35
+@export var spear_windup := 0.20
+@export var spear_thrust := 0.14
+@export var spear_recover := 0.30
+# 舉盾
+@export var block_reduce := 0.85       # 擋下時減少的傷害比例
+@export var block_angle_deg := 75.0    # 正前方左右各幾度內的攻擊擋得下
+@export var block_speed_scale := 0.5
+# 步伐（每跑一個動畫循環前進的距離，越大步伐越大）
+@export var walk_stride := 1.9
+@export var run_stride := 3.2
 # 受擊反應
 @export var hurt_time := 0.32           # 硬直秒數：移動變慢、蓄力會被打斷
 @export var hurt_knockback := 6.0       # 步行時被擊退的初速（m/s）
@@ -68,6 +88,8 @@ var _shape: CollisionShape3D
 var _swing_dir := 1.0            # +1：右→左橫掃；-1：左→右（連段交替）
 var _attack_buffered := false    # 收招中按下攻擊 → 收招結束立刻接下一刀
 var _swing_t := -1.0             # 目前揮擊進度 0..1；-1 = 沒有在揮
+var weapon := Weapon.SWORD
+var blocking := false
 var hurt_t := 0.0                # >0：受擊硬直中
 var _knock := Vector3.ZERO       # 擊退速度（逐漸衰減）
 var _flash_t := 0.0              # 受擊閃紅剩餘秒數
@@ -100,26 +122,89 @@ func _build_visual() -> void:
 	visual.name = "PlayerVisual"
 	_baked = GameConfig.baked_set("knight")
 	if _baked:
-		visual.setup_main_baked(_baked, ["body", "sword"], PLAYER_TINT)
+		var layers := ["body", "sword"]
+		if _baked.layers.has("spear"):
+			layers.append("spear")
+		visual.setup_main_baked(_baked, layers, PLAYER_TINT)
+		_apply_weapon_layers()
 	else:
 		visual.setup_main(PlaceholderArt.unit_atlas_tinted(PlaceholderArt.Unit.INFANTRY, PLAYER_TINT), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
 	add_child(visual)
 
 
+## 只顯示目前武器的圖層（步行的自己、騎馬時馬上的騎士都一樣）
+func _apply_weapon_layers() -> void:
+	var show_spear := weapon == Weapon.SPEAR
+	for v in [visual, horse.visual if horse else null]:
+		if v == null:
+			continue
+		(v as LayeredActorVisual).set_layer_hidden("spear", not show_spear)
+		(v as LayeredActorVisual).set_layer_hidden("sword", show_spear)
+
+
+func _switch_weapon() -> void:
+	weapon = Weapon.SPEAR if weapon == Weapon.SWORD else Weapon.SWORD
+	_apply_weapon_layers()
+	weapon_changed.emit(WEAPON_NAMES[weapon])
+
+
+func reach() -> float:
+	if weapon == Weapon.SPEAR:
+		return spear_reach_mounted if mounted else spear_reach_foot
+	return reach_mounted if mounted else reach_foot
+
+
 ## 揮擊進度 0..1（含蓄力與收招），給預渲染動畫選幀：蓄力 = 前 1/3，揮出 = 中段，收招 = 最後 1/6
 func attack_anim_progress() -> float:
+	if weapon == Weapon.SPEAR:
+		# 刺擊動畫：0~0.3 收槍、0.5 刺出、之後收回
+		match attack_phase:
+			AttackPhase.WINDUP:
+				return (1.0 - attack_timer / _wt()) * 0.4
+			AttackPhase.SWING:
+				return 0.4 + (1.0 - attack_timer / _st()) * 0.3
+			AttackPhase.RECOVER:
+				return 0.7 + (1.0 - attack_timer / _rt()) * 0.3
+		return 0.0
 	match attack_phase:
 		AttackPhase.WINDUP:
-			return (1.0 - attack_timer / windup_time) / 3.0
+			return (1.0 - attack_timer / _wt()) / 3.0
 		AttackPhase.SWING:
-			return 1.0 / 3.0 + (1.0 - attack_timer / swing_time) * 0.5
+			return 1.0 / 3.0 + (1.0 - attack_timer / _st()) * 0.5
 		AttackPhase.RECOVER:
-			return 5.0 / 6.0 + (1.0 - attack_timer / recover_time) / 6.0
+			return 5.0 / 6.0 + (1.0 - attack_timer / _rt()) / 6.0
 	return 0.0
 
 
 func _attack_action(on_horse: bool) -> String:
-	return ("ride_attack" if on_horse else "attack") + ("_a" if _swing_dir > 0.0 else "_b")
+	if weapon == Weapon.SPEAR:
+		if on_horse:
+			return "ride_thrust"
+		return "walk_thrust" if _moving() else "thrust"
+	var side := "_a" if _swing_dir > 0.0 else "_b"
+	if on_horse:
+		return "ride_attack" + side
+	return ("walk_attack" if _moving() else "attack") + side
+
+
+func _moving() -> bool:
+	return Vector2(velocity.x, velocity.z).length() > 0.5
+
+
+func _wt() -> float:
+	return spear_windup if weapon == Weapon.SPEAR else windup_time
+
+
+func _st() -> float:
+	return spear_thrust if weapon == Weapon.SPEAR else swing_time
+
+
+func _rt() -> float:
+	return spear_recover if weapon == Weapon.SPEAR else recover_time
+
+
+func _row_or(action: String, fallback: String, progress: float) -> int:
+	return _baked.row_at_progress(action if _baked.has_action(action) else fallback, progress)
 
 
 ## 預渲染圖：步行時選哪一列
@@ -127,12 +212,19 @@ func _baked_foot_row() -> int:
 	if dead:
 		return _baked.row_at_time("death", 4.0 - _respawn_timer)
 	if attack_phase != AttackPhase.NONE:
-		return _baked.row_at_progress(_attack_action(false), attack_anim_progress())
+		var fb := ("thrust" if weapon == Weapon.SPEAR else ("attack_a" if _swing_dir > 0.0 else "attack_b"))
+		return _row_or(_attack_action(false), fb, attack_anim_progress())
 	var spd := Vector2(velocity.x, velocity.z).length()
+	if hurt_t > 0.0 and not blocking:
+		return _row_or("hurt", "idle", 1.0 - hurt_t / hurt_time)
+	if blocking:
+		if spd > 0.3:
+			return _row_or("walk_block", "walk", fmod(_walk_phase / walk_stride, 1.0))
+		return _row_or("block", "idle", fmod(Time.get_ticks_msec() / 1000.0, 1.0))
 	if spd > 0.3:
 		if spd > (walk_speed + run_speed) * 0.5:
-			return _baked.row_at_progress("run", fmod(_walk_phase / 2.6, 1.0))
-		return _baked.row_at_progress("walk", fmod(_walk_phase / 1.5, 1.0))
+			return _baked.row_at_progress("run", fmod(_walk_phase / run_stride, 1.0))
+		return _baked.row_at_progress("walk", fmod(_walk_phase / walk_stride, 1.0))
 	return _baked.row_at_time("idle", Time.get_ticks_msec() / 1000.0)
 
 
@@ -162,36 +254,56 @@ func move_velocity() -> Vector3:
 func take_damage(amount: float, from_pos = null) -> void:
 	if dead:
 		return
-	hp -= amount
 	var away := -facing
 	if from_pos != null:
 		away = global_position - (from_pos as Vector3)
 		away.y = 0.0
 		away = away.normalized() if away.length_squared() > 0.0001 else -facing
+	# 舉盾：正前方的攻擊大幅減傷，不會硬直也不會被打斷
+	if blocking and from_pos != null and facing.dot(-away) > cos(deg_to_rad(block_angle_deg)):
+		hp -= amount * (1.0 - block_reduce)
+		if not mounted:
+			_knock = away * 1.6
+		blocked.emit(global_position + Vector3(0, 2.0 if mounted else 1.1, 0) - away * 0.5)
+		if hp <= 0.0:
+			_die()
+		return
+	hp -= amount
 	hurt_t = hurt_time
+	# 被打中會中斷目前的動作（蓄力、揮出、收招都算）
+	if attack_phase != AttackPhase.NONE:
+		attack_phase = AttackPhase.NONE
+		_swing_t = -1.0
+		_attack_buffered = false
 	_flash_t = 0.18
 	_recoil = away * (0.12 if mounted else 0.25)
 	if not mounted:
 		_knock = away * hurt_knockback * clampf(amount / 15.0, 0.5, 1.3)
-		# 蓄力中被打會被打斷（揮出後就不會）
-		if attack_phase == AttackPhase.WINDUP:
-			attack_phase = AttackPhase.NONE
-			_attack_buffered = false
 	damaged.emit(amount)
 	if hp <= 0.0:
-		hp = 0.0
-		if mounted and _mount_t < 0.0:
-			_dismount()          # 落馬
-		dead = true
-		_respawn_timer = 4.0
-		attack_phase = AttackPhase.NONE
-		died.emit()
+		_die()
+
+
+func _die() -> void:
+	if dead:
+		return
+	hp = 0.0
+	if mounted and _mount_t < 0.0:
+		_dismount()          # 落馬
+	dead = true
+	blocking = false
+	_respawn_timer = 4.0
+	attack_phase = AttackPhase.NONE
+	_swing_t = -1.0
+	died.emit()
 
 
 func rider_anim_row() -> int:
 	if _baked:
 		if attack_phase != AttackPhase.NONE:
-			return _baked.row_at_progress(_attack_action(true), attack_anim_progress())
+			return _row_or(_attack_action(true), "ride_attack_a", attack_anim_progress())
+		if blocking:
+			return _row_or("ride_block", "ride_idle", fmod(Time.get_ticks_msec() / 1000.0, 1.0))
 		return _baked.row_at_time("ride_idle", Time.get_ticks_msec() / 1000.0)
 	match attack_phase:
 		AttackPhase.WINDUP:
@@ -227,7 +339,17 @@ func _physics_process(delta: float) -> void:
 		elif horse and global_position.distance_to(horse.global_position) <= mount_range:
 			_start_mount()
 
-	if Input.is_action_just_pressed("attack") and _mount_t < 0.0:
+	if Input.is_action_just_pressed("switch_weapon") and attack_phase == AttackPhase.NONE:
+		_switch_weapon()
+
+	# 右鍵舉盾：硬直中舉不起來；蓄力中舉盾會取消這一刀，揮出後要等收招完
+	var want_block := Input.is_action_pressed("block") and _mount_t < 0.0 and hurt_t <= 0.0
+	if want_block and attack_phase == AttackPhase.WINDUP:
+		attack_phase = AttackPhase.NONE
+		_attack_buffered = false
+	blocking = want_block and attack_phase == AttackPhase.NONE
+
+	if Input.is_action_just_pressed("attack") and _mount_t < 0.0 and not blocking:
 		if attack_phase == AttackPhase.NONE:
 			_begin_attack()
 		elif attack_phase == AttackPhase.RECOVER or attack_phase == AttackPhase.SWING:
@@ -252,13 +374,15 @@ func _physics_process(delta: float) -> void:
 func _move_on_foot(dir: Vector3, input: Vector2, sprint: bool, delta: float) -> void:
 	if cam_rig and attack_phase != AttackPhase.SWING and attack_phase != AttackPhase.RECOVER:
 		facing = cam_rig.flat_forward()      # 揮出後到收招前鎖定，掃掠弧線才不會被滑鼠甩歪
-	var can_run := sprint and input.y > 0.3
+	var can_run := sprint and input.y > 0.3 and not blocking
 	var spd := run_speed if can_run else walk_speed
 	if input.length() > 0.01:
 		var n := input.normalized()
 		spd *= lerpf(1.0, back_speed_scale if n.y < 0.0 else strafe_speed_scale, minf(absf(n.y) if n.y < 0.0 else absf(n.x), 1.0))
 	if attack_phase != AttackPhase.NONE:
 		spd *= 0.55
+	if blocking:
+		spd *= block_speed_scale
 	if hurt_t > 0.0:
 		spd *= 0.3
 	var dl := Vector2(dir.x, dir.z).length()
@@ -294,6 +418,7 @@ func _start_mount() -> void:
 	_mount_from = global_position
 	mounted = true
 	horse.rider = self
+	_apply_weapon_layers()
 	_shape.disabled = true
 	velocity = Vector3.ZERO
 
@@ -362,7 +487,7 @@ func _respawn() -> void:
 # ---------------------------------------------------------------------------
 func _begin_attack() -> void:
 	attack_phase = AttackPhase.WINDUP
-	attack_timer = windup_time
+	attack_timer = _wt()
 	_attack_buffered = false
 
 
@@ -384,7 +509,7 @@ func _update_attack(delta: float) -> void:
 		AttackPhase.WINDUP:
 			if attack_timer <= 0.0:
 				attack_phase = AttackPhase.SWING
-				attack_timer = swing_time
+				attack_timer = _st()
 				_swing_t = 0.0
 				_swing_hit.clear()
 				swing_started.emit(mounted)
@@ -392,7 +517,7 @@ func _update_attack(delta: float) -> void:
 				_swing_prev_base = g[0]
 				_swing_prev_tip = g[1]
 		AttackPhase.SWING:
-			var t := clampf(1.0 - attack_timer / swing_time, 0.0, 1.0)
+			var t := clampf(1.0 - attack_timer / _st(), 0.0, 1.0)
 			_swing_t = t
 			var g := _swing_geometry(t)
 			_sweep(_swing_prev_base, _swing_prev_tip, g[0], g[1])
@@ -400,9 +525,9 @@ func _update_attack(delta: float) -> void:
 			_swing_prev_tip = g[1]
 			if attack_timer <= 0.0:
 				attack_phase = AttackPhase.RECOVER
-				attack_timer = recover_time
+				attack_timer = _rt()
 		AttackPhase.RECOVER:
-			if attack_timer <= recover_time - 0.12:
+			if attack_timer <= _rt() - 0.12:
 				_swing_t = -1.0
 			if attack_timer <= 0.0:
 				attack_phase = AttackPhase.NONE
@@ -418,7 +543,14 @@ func _swing_geometry(t: float, origin = null) -> Array:
 	var f := facing
 	var right := Vector3(-f.z, 0, f.x)
 	var shoulder_h := 2.3 if mounted else 1.35
-	var reach := reach_mounted if mounted else reach_foot
+	if weapon == Weapon.SPEAR:
+		# 刺擊：槍從肩膀往正前方（略往下）直直推出去，前段收在身邊、刺到底時達最大距離
+		var sb := at + Vector3(0, shoulder_h - 0.1, 0) + right * 0.2
+		var sdir := (f + Vector3(0, -0.35 if mounted else -0.12, 0)).normalized()
+		var se := t * t * (3.0 - 2.0 * t)
+		var stip := sb + sdir * reach() * lerpf(0.35, 1.0, se)
+		return [stip - sdir * 1.0, stip]
+	var reach := reach()
 	var base := at + Vector3(0, shoulder_h, 0) + right * 0.25 * _swing_dir
 	# 前後段慢、中段快（ease），比等速轉動更有「甩出去」的感覺
 	var e := t * t * (3.0 - 2.0 * t)
@@ -438,6 +570,7 @@ func _sweep(prev_base: Vector3, prev_tip: Vector3, base: Vector3, tip: Vector3) 
 		return
 	var my_vel := move_velocity()
 	var total := 0.0
+	var stuck := false
 	for idx in hits:
 		_swing_hit[idx] = true
 		var spos: Vector3 = battle.call("soldier_position", idx)
@@ -447,7 +580,13 @@ func _sweep(prev_base: Vector3, prev_tip: Vector3, base: Vector3, tip: Vector3) 
 		to_target = to_target.normalized()
 		# 相對速度在「朝向目標」方向的分量：迎面衝鋒 > 靜止 > 同向追擊
 		var closing := maxf(0.0, (my_vel - svel).dot(to_target))
-		var dmg := base_damage + closing * speed_damage
+		var dmg := base_damage + closing * speed_damage * (1.4 if weapon == Weapon.SPEAR and mounted else 1.0)
+		var flat := spos - global_position
+		flat.y = 0.0
+		if weapon == Weapon.SPEAR and not mounted and flat.length() < spear_min_dist:
+			# 貼太近：槍身被頂住刺不出去 → 傷害大減、這一刀直接結束並多一點收招時間
+			dmg *= spear_stuck_damage
+			stuck = true
 		var knock := to_target * (0.6 + closing * 0.12)
 		var killed: bool = battle.call("apply_damage", idx, dmg, knock)
 		if killed:
@@ -455,7 +594,14 @@ func _sweep(prev_base: Vector3, prev_tip: Vector3, base: Vector3, tip: Vector3) 
 		total += dmg
 		var point := spos + Vector3(0, 1.2, 0) - to_target * 0.3
 		hit_detail.emit(point, dmg, killed, closing)
+		if stuck:
+			weapon_stuck.emit(point)
+			break
 	hit_landed.emit(hits.size(), total)
+	if stuck:
+		attack_phase = AttackPhase.RECOVER
+		attack_timer = _rt() + 0.3
+		_swing_t = -1.0
 
 
 func _update_debug_sweeps(delta: float) -> void:

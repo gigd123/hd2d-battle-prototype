@@ -7,8 +7,8 @@ extends CharacterBody3D
 ## - 急轉彎（目標方向與目前朝向差太多）會自動減速
 ## - 撞牆會掉速；穿過人群會依人數減速（由戰場管理器提供「周圍士兵」查詢）
 
-@export var trot_speed := 6.5
-@export var gallop_speed := 13.0
+@export var trot_speed := 7.5
+@export var gallop_speed := 15.0
 @export var accel := 5.0
 @export var brake := 9.0
 @export var turn_rate_slow := 2.8      # 低速時每秒可轉的弧度
@@ -61,7 +61,13 @@ func _build_visual() -> void:
 	var rider_set := GameConfig.baked_set("knight")
 	if _baked and rider_set:
 		visual.setup_main_baked(_baked, ["horse"], CLOTH_TINT, 2.4)
-		visual.setup_attach_baked(rider_set, ["body", "sword"], "saddle", "seat", CLOTH_TINT)
+		var layers := ["body", "sword"]
+		if rider_set.layers.has("spear"):
+			layers.append("spear")
+		visual.setup_attach_baked(rider_set, layers, "saddle", "seat", CLOTH_TINT)
+		visual.set_layer_hidden("spear", true)
+		if rider != null and rider.has_method("_apply_weapon_layers"):
+			rider.call("_apply_weapon_layers")
 	else:
 		_baked = null
 		visual.setup_main(PlaceholderArt.horse_atlas(), PlaceholderArt.HORSE_FRAME, PlaceholderArt.HORSE_ROWS, PlaceholderArt.horse_anchors(), 2.4)
@@ -153,8 +159,8 @@ func anim_row() -> int:
 		if speed < 0.6:
 			return _baked.row_at_time("idle", Time.get_ticks_msec() / 1000.0)
 		if speed < (trot_speed + gallop_speed) * 0.5:
-			return _baked.row_at_progress("trot", fmod(_stride / 2.2, 1.0))
-		return _baked.row_at_progress("gallop", fmod(_stride / 3.6, 1.0))
+			return _baked.row_at_progress("trot", fmod(_stride / 2.8, 1.0))
+		return _baked.row_at_progress("gallop", fmod(_stride / 4.4, 1.0))
 	if speed < 0.6:
 		return 0
 	return int(_stride / 1.4) % 2
