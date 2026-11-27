@@ -1,0 +1,31 @@
+; Engine configuration file.
+; 以 Godot 4.5 建立；4.5 以上版本皆可開啟。
+
+config_version=5
+
+[application]
+
+config/name="HD-2D Battle Prototype"
+config/description="原創 HD-2D 中世紀騎馬軍團戰鬥：技術原型（全佔位素材）"
+run/main_scene="res://scenes/battlefield.tscn"
+config/features=PackedStringArray("4.5", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+GameConfig="*res://scripts/core/game_config.gd"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+common/physics_ticks_per_second=60
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0
+anti_aliasing/quality/msaa_3d=0
