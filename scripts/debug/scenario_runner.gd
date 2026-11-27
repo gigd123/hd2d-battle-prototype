@@ -8,6 +8,7 @@ var steps: Array = []
 var _t := 0.0
 var _i := 0
 var _held: Array[StringName] = []
+var _follow_cam := false
 
 
 func setup(scenario: String) -> void:
@@ -51,12 +52,47 @@ func setup(scenario: String) -> void:
 				[11.0, "shot", "12_follow"], [11.5, "release", "move_left"], [12.0, "tap", "order_hold"],
 				[14.0, "shot", "13_hold"], [14.0, "report", ""], [14.2, "quit", ""],
 			]
+		"demo":
+			# 展示影片：上馬 → 下令衝鋒 → 奔馳衝入敵陣連續揮擊 → 回轉再衝 → 下令跟隨 → 下馬
+			steps = [
+				[0.0, "cam", "17"], [0.0, "followcam", ""], [0.8, "tap", "interact"],
+				[1.8, "tap", "order_charge"], [2.0, "hold", "move_forward"], [2.8, "hold", "sprint"],
+				[5.40, "tap", "attack"],
+				[6.06, "tap", "attack"],
+				[6.72, "tap", "attack"],
+				[7.38, "tap", "attack"],
+				[8.04, "tap", "attack"],
+				[8.70, "tap", "attack"],
+				[9.0, "release", "move_forward"],
+				[9.0, "hold", "move_back"],
+				[10.6, "release", "move_back"],
+				[10.6, "hold", "move_forward"],
+				[11.60, "tap", "attack"],
+				[12.26, "tap", "attack"],
+				[12.92, "tap", "attack"],
+				[13.58, "tap", "attack"],
+				[14.24, "tap", "attack"],
+				[14.90, "tap", "attack"],
+				[15.2, "tap", "order_follow"],
+				[15.4, "release", "sprint"],
+				[17.5, "release", "move_forward"],
+				[19.0, "tap", "interact"],
+				[20.5, "tap", "attack"],
+				[22.0, "report", ""], [22.1, "quit", ""],
+			]
 		_:
 			steps = [[0.5, "quit", ""]]
 
 
 func _physics_process(delta: float) -> void:
 	_t += delta
+	if _follow_cam:
+		# 相機慢慢轉到玩家（或馬）背後
+		var bf := get_tree().current_scene
+		var rig: OrbitFollowCamera = bf.get("cam_rig")
+		var pl: PlayerController = bf.get("player")
+		var h := atan2(pl.facing.x, pl.facing.z)
+		rig.yaw = lerp_angle(rig.yaw, h + PI, 0.06)
 	while _i < steps.size() and _t >= steps[_i][0]:
 		_run(steps[_i])
 		_i += 1
@@ -80,6 +116,8 @@ func _run(step: Array) -> void:
 			await get_tree().physics_frame
 			await get_tree().physics_frame
 			Input.action_release(arg)
+		"followcam":
+			_follow_cam = true
 		"cam":
 			var rig: Node = get_tree().current_scene.get("cam_rig")
 			rig.set("distance", float(arg))
@@ -92,7 +130,8 @@ func _run(step: Array) -> void:
 		"report":
 			var bf := get_tree().current_scene
 			var bm: Node = bf.get("battle")
-			print("[scenario] t=%.0f  %s" % [_t, bm.call("stats_text").replace("\n", " | ")])
+			var pl: Node = bf.get("player")
+			print("[scenario] t=%.0f  玩家擊殺 %d 生命 %d  %s" % [_t, pl.get("total_kills"), pl.get("hp"), bm.call("stats_text").replace("\n", " | ")])
 			if int(bm.get("winner")) != -1:
 				get_tree().quit()
 		"quit":

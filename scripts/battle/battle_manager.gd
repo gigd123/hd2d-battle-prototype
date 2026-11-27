@@ -583,7 +583,8 @@ func _move_and_fight(delta: float) -> void:
 				var rd := sqrt(rd2)
 				push.x += rx / rd * (min_d - rd) * 3.0
 				push.z += rz / rd * (min_d - rd) * 3.0
-			if pl_speed > 3.0 and rd2 < 25.0:
+			# 只有友軍會讓路；敵軍不閃避（否則衝鋒永遠撞不到人）
+			if team[i] == player.team and pl_speed > 3.0 and rd2 < 25.0:
 				var ahead := rx * pl_fwd.x + rz * pl_fwd.z
 				var lateral := rx * -pl_fwd.z + rz * pl_fwd.x
 				if ahead > 0.0 and ahead < 5.0 and absf(lateral) < 1.6:

@@ -159,6 +159,8 @@ scripts/
 ```bash
 # 自動騎馬並截圖（--shots 指定輸出資料夾）
 godot --path . -- --scenario=ride --shots=/tmp/shots --debug-draw
+# 錄製展示影片（Godot Movie Maker，逐幀輸出，不受電腦速度影響）
+godot --path . --write-movie demo.avi --fixed-fps 30 -- --scenario=demo --debug-draw
 # 玩家不操作，每 10 秒印出戰況，直到分出勝負
 godot --headless --path . --fixed-fps 60 -- --scenario=battle
 ```
