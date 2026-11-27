@@ -46,6 +46,32 @@ var _ob_w := 0
 var _ob_empty: Array[Vector3] = []
 var _half := 0.0
 var _noise := FastNoiseLite.new()
+## 會遮住玩家的物體（樹、岩石）的材質：每幀由戰場更新 occl_target，玩家附近的部分會以點陣淡化成半透明
+var occluder_materials: Array[ShaderMaterial] = []
+
+const OCCLUSION_GLSL := """
+uniform vec3 occl_target = vec3(0.0, -1000.0, 0.0);
+uniform float occl_radius = 1.5;     // 以玩家為中心的淡化半徑（公尺，換算成畫面大小）
+uniform float occl_strength = 0.75;  // 最多挖掉幾成像素
+float bayer4(vec2 p) {
+	ivec2 i = ivec2(mod(p, 4.0));
+	int idx = i.x + i.y * 4;
+	float m[16] = float[](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+	return (m[idx] + 0.5) / 16.0;
+}
+// 物體在玩家前方（比玩家靠近鏡頭）且在畫面上蓋住玩家時，用點陣挖洞（不用半透明排序，效能穩定）
+bool occluded(vec3 view_pos, mat4 view, vec2 fragcoord) {
+	vec3 t = (view * vec4(occl_target, 1.0)).xyz;
+	if (t.z > -0.5 || -view_pos.z > -t.z - 0.4) {
+		return false;
+	}
+	vec2 a = view_pos.xy / -view_pos.z;
+	vec2 b = t.xy / -t.z;
+	float r = occl_radius / -t.z;
+	float fade = 1.0 - smoothstep(r * 0.6, r, length(a - b));
+	return fade * occl_strength > bayer4(fragcoord);
+}
+"""
 var _grove := FastNoiseLite.new()
 
 
@@ -320,9 +346,18 @@ func _build_water() -> void:
 func _build_obstacles() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 99
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.52, 0.50, 0.48) if terrain_type != Type.SNOW else Color(0.46, 0.46, 0.50)
-	mat.roughness = 1.0
+	var rock_sh := Shader.new()
+	rock_sh.code = "shader_type spatial;\nuniform vec4 color : source_color;\n" + OCCLUSION_GLSL + """
+void fragment() {
+	if (occluded(VERTEX, VIEW_MATRIX, FRAGCOORD.xy)) { discard; }
+	ALBEDO = color.rgb;
+	ROUGHNESS = 1.0;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = rock_sh
+	mat.set_shader_parameter("color", Color(0.52, 0.50, 0.48) if terrain_type != Type.SNOW else Color(0.46, 0.46, 0.50))
+	occluder_materials.append(mat)
 	var spots := [Vector2(-8, 14), Vector2(6, -16), Vector2(-22, -6), Vector2(20, 18), Vector2(-4, -30), Vector2(-30, 24)]
 	if terrain_type == Type.PLAINS:
 		spots = [Vector2(-8, 14), Vector2(20, 18), Vector2(-4, -30)]
@@ -437,15 +472,33 @@ func _add_tree_multimesh(positions: Array, tex: Texture2D, tint: Color, rng: Ran
 	var quad := QuadMesh.new()
 	quad.size = Vector2(tex.get_width(), tex.get_height()) * PlaceholderArt.PIXEL_SIZE * 2.0
 	quad.center_offset = Vector3(0, quad.size.y * 0.5, 0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.albedo_color = tint
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	mat.alpha_scissor_threshold = 0.5
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
-	mat.billboard_keep_scale = true
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	# 自訂著色器：Y 軸 Billboard＋俯角補償（跟角色一致）＋遮擋淡化
+	var sh := Shader.new()
+	sh.code = "shader_type spatial;\nrender_mode unshaded, cull_disabled, skip_vertex_transform;\n" \
+		+ "uniform sampler2D tex : source_color, filter_nearest;\nuniform vec4 tint : source_color = vec4(1.0);\nuniform float pitch_comp = 0.85;\n" \
+		+ OCCLUSION_GLSL + """
+void vertex() {
+	vec3 origin = MODEL_MATRIX[3].xyz;
+	float sc = length(MODEL_MATRIX[1].xyz);
+	vec3 cam_right = normalize(vec3(INV_VIEW_MATRIX[0].x, 0.0, INV_VIEW_MATRIX[0].z));
+	float cos_p = length(vec2(INV_VIEW_MATRIX[2].x, INV_VIEW_MATRIX[2].z));
+	float stretch = mix(1.0, 1.0 / max(cos_p, 0.5), pitch_comp);
+	vec3 world = origin + cam_right * VERTEX.x * sc + vec3(0.0, VERTEX.y * sc * stretch, 0.0);
+	VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
+	NORMAL = vec3(0.0, 0.0, 1.0);
+}
+void fragment() {
+	vec4 c = texture(tex, UV);
+	if (c.a < 0.5 || occluded(VERTEX, VIEW_MATRIX, FRAGCOORD.xy)) { discard; }
+	ALBEDO = c.rgb * tint.rgb;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("tex", tex)
+	mat.set_shader_parameter("tint", tint)
+	mat.set_shader_parameter("pitch_comp", GameConfig.pitch_compensation)
+	occluder_materials.append(mat)
 	quad.material = mat
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -458,7 +511,15 @@ func _add_tree_multimesh(positions: Array, tex: Texture2D, tint: Color, rng: Ran
 	mmi.name = "Trees"
 	mmi.multimesh = mm
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Billboard 在著色器裡旋轉，引擎算不到真正範圍
+	mmi.custom_aabb = AABB(Vector3(-_half, -20, -_half), Vector3(size_m, 60, size_m))
 	add_child(mmi)
+
+
+## 遮擋淡化的目標（玩家身體中心）；沒有玩家時傳很低的位置關閉
+func set_occlusion_target(p: Vector3) -> void:
+	for m in occluder_materials:
+		m.set_shader_parameter("occl_target", p)
 
 
 ## 針葉樹佔位圖（雪地用，可加積雪）

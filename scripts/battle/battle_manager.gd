@@ -107,6 +107,7 @@ var utype := PackedByteArray()          # 兵種
 var rad := PackedFloat32Array()         # 碰撞半徑（依兵種）
 var engage_t := PackedFloat32Array()    # 騎兵：已纏鬥秒數
 var disengage_t := PackedFloat32Array() # 騎兵：>0 時正在脫離（往前跑開）
+var push_s := PackedVector3Array()      # 平滑後的推擠速度（避免人群裡每步來回抖動）
 
 # --- 箭矢（固定容量環狀緩衝）---
 var arrow_pos := PackedVector3Array()
@@ -287,6 +288,7 @@ func _clear() -> void:
 	rad = PackedFloat32Array()
 	engage_t = PackedFloat32Array()
 	disengage_t = PackedFloat32Array()
+	push_s = PackedVector3Array()
 	squad_type = PackedByteArray()
 	squad_team = PackedByteArray()
 	squad_order = PackedByteArray()
@@ -327,6 +329,7 @@ func _add_soldier(t: int, sq: int, k: int) -> void:
 	rad.append(U_RADIUS[ut])
 	engage_t.append(0.0)
 	disengage_t.append(0.0)
+	push_s.append(Vector3.ZERO)
 	team.append(t)
 	squad.append(sq)
 	slot.append(k)
@@ -717,7 +720,7 @@ func _move_and_fight(delta: float) -> void:
 				if Vector2(tp2.x - p.x, tp2.z - p.z).length() <= reach2 and rng.randf() < 0.75:
 					var dmg := rng.randf_range(U_DMG_MIN[ut], U_DMG_MAX[ut])
 					if tg == TARGET_PLAYER:
-						player.take_damage(dmg)
+						player.take_damage(dmg, p)
 					else:
 						apply_damage(tg, dmg, face * 0.15)
 					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), true)
@@ -729,6 +732,11 @@ func _move_and_fight(delta: float) -> void:
 		var my_r := rad[i]
 		var my_team := team[i]
 		var cav_speed := v.length() if ut == UnitType.CAVALRY else 0.0
+		# 排隊：前進方向正前方有同隊友軍時放慢，而不是硬擠過去（擠在一起卡卡的主因）
+		var block := 0.0
+		var ddl := Vector2(desired.x, desired.z).length()
+		var ddx := desired.x / ddl if ddl > 0.1 else 0.0
+		var ddz := desired.z / ddl if ddl > 0.1 else 0.0
 		var cx := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
 		var cz := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
 		for gz in range(maxi(cz - 1, 0), mini(cz + 2, _grid_w)):
@@ -739,6 +747,10 @@ func _move_and_fight(delta: float) -> void:
 						var dx := p.x - pos[j].x
 						var dz := p.z - pos[j].z
 						var d2 := dx * dx + dz * dz
+						if ddl > 0.1 and team[j] == my_team and d2 < 2.6 and state[j] != State.DEAD:
+							var ahead_j := -(dx * ddx + dz * ddz)
+							if ahead_j > 0.0 and ahead_j * ahead_j > d2 * 0.6:
+								block = maxf(block, 1.0 - sqrt(d2) / 1.6)
 						var sd := my_r + rad[j] + 0.1
 						if d2 < sd * sd and d2 > 0.000001:
 							var dd := sqrt(d2)
@@ -812,9 +824,28 @@ func _move_and_fight(delta: float) -> void:
 				# 急轉彎時減速（轉彎半徑），不會原地甩頭
 				desired = face * dlen * clampf(cos(diff), 0.25, 1.0)
 			push *= CAV_PUSH_SCALE
+		elif ddl > 0.1:
+			desired *= 1.0 - block * 0.75
+			# 步兵／弓兵的朝向也限制轉速，人群裡不會每幀換方向圖
+			var cur_a := atan2(facing[i].x, facing[i].z)
+			var dif_a := wrapf(atan2(face.x, face.z) - cur_a, -PI, PI)
+			cur_a += clampf(dif_a, -9.0 * delta, 9.0 * delta)
+			face = Vector3(sin(cur_a), 0.0, cos(cur_a))
+		else:
+			var cur_b := atan2(facing[i].x, facing[i].z)
+			var dif_b := wrapf(atan2(face.x, face.z) - cur_b, -PI, PI)
+			cur_b += clampf(dif_b, -9.0 * delta, 9.0 * delta)
+			face = Vector3(sin(cur_b), 0.0, cos(cur_b))
 		v = v.lerp(desired, minf(1.0, 8.0 * delta))
-		p.x += (v.x + push.x * 4.0) * delta
-		p.z += (v.z + push.z * 4.0) * delta
+		# 推擠速度平滑＋上限：重疊時逐漸分開，不會一步彈開、下一步又擠回來
+		var pv := push * 4.0
+		var pl := pv.length()
+		if pl > 4.0:
+			pv *= 4.0 / pl
+		var ps := push_s[i].lerp(pv, minf(1.0, 14.0 * delta))
+		push_s[i] = ps
+		p.x += (v.x + ps.x) * delta
+		p.z += (v.z + ps.z) * delta
 		p = terrain.clamp_to_map(p, 4.0)
 		p.y = terrain.get_height(p.x, p.z)
 		pos[i] = p
@@ -822,7 +853,7 @@ func _move_and_fight(delta: float) -> void:
 		facing[i] = face
 		if atk_anim[i] > 0.0:
 			state[i] = State.ENGAGE
-		elif v.length_squared() > 0.09:
+		elif v.length_squared() > (0.09 if state[i] == State.MOVE else 0.36):
 			state[i] = State.MOVE
 		else:
 			state[i] = State.IDLE
@@ -910,7 +941,7 @@ func _update_arrows(delta: float) -> void:
 			arrow_hit.emit(p, true)
 			continue
 		if pl_ok and tm != player.team and p.distance_to(pl_center) < pl_r:
-			player.take_damage(ARROW_DAMAGE_PLAYER * arrow_mult[k])
+			player.take_damage(ARROW_DAMAGE_PLAYER * arrow_mult[k], p - v.normalized())
 			arrow_state[k] = 0
 			arrow_hit.emit(p, true)
 

@@ -36,6 +36,9 @@ var battle_seed := 12345
 var debug_draw := false
 ## 場地類型（BattleTerrain.Type）：F8 下一種、F9 隨機；啟動參數 --terrain=plains|hills|forest|river|snow|random
 var terrain_type := 1
+## 俯角補償（0 = 關，1 = 完全補償）：Y 軸 Billboard 是直立紙片，相機越往下看，畫面上就越扁。
+## 依相機俯角把角色往上拉長，讓俯視時比例接近正常。完全面向相機模式本來就不會扁，不套用。
+var pitch_compensation := 0.85
 
 
 func _ready() -> void:
@@ -118,6 +121,15 @@ func toggle_art_mode() -> void:
 
 func art_mode_name() -> String:
 	return "預渲染 3D 像素圖" if art_mode == ArtMode.BAKED else "程式佔位圖"
+
+
+## 目前相機下 Y 軸 Billboard 角色要拉高的倍率（腳底不動）
+func billboard_stretch(cam: Camera3D) -> float:
+	if full_billboard or cam == null or pitch_compensation <= 0.0:
+		return 1.0
+	var f := -cam.global_basis.z
+	var cos_p := Vector2(f.x, f.z).length()
+	return lerpf(1.0, 1.0 / maxf(cos_p, 0.5), pitch_compensation)
 
 
 func billboard_mode() -> BaseMaterial3D.BillboardMode:

@@ -29,6 +29,11 @@ enum AttackPhase { NONE, WINDUP, SWING, RECOVER }
 @export var base_damage := 22.0
 @export var speed_damage := 3.0       # 每 m/s 相對速度加成
 @export var blade_radius := 0.15
+# 受擊反應
+@export var hurt_time := 0.32           # 硬直秒數：移動變慢、蓄力會被打斷
+@export var hurt_knockback := 6.0       # 步行時被擊退的初速（m/s）
+@export var back_speed_scale := 0.6     # 往後退的速度比例（邊打邊退）
+@export var strafe_speed_scale := 0.8   # 左右平移的速度比例
 
 var team := 0
 var horse: Horse
@@ -63,6 +68,10 @@ var _shape: CollisionShape3D
 var _swing_dir := 1.0            # +1：右→左橫掃；-1：左→右（連段交替）
 var _attack_buffered := false    # 收招中按下攻擊 → 收招結束立刻接下一刀
 var _swing_t := -1.0             # 目前揮擊進度 0..1；-1 = 沒有在揮
+var hurt_t := 0.0                # >0：受擊硬直中
+var _knock := Vector3.ZERO       # 擊退速度（逐漸衰減）
+var _flash_t := 0.0              # 受擊閃紅剩餘秒數
+var _recoil := Vector3.ZERO      # 畫面上的後仰位移（不影響判定）
 
 
 func _ready() -> void:
@@ -149,10 +158,25 @@ func move_velocity() -> Vector3:
 	return Vector3(velocity.x, 0, velocity.z)
 
 
-func take_damage(amount: float) -> void:
+## from_pos：攻擊來源位置（決定擊退方向）；不給就往面向的反方向退
+func take_damage(amount: float, from_pos = null) -> void:
 	if dead:
 		return
 	hp -= amount
+	var away := -facing
+	if from_pos != null:
+		away = global_position - (from_pos as Vector3)
+		away.y = 0.0
+		away = away.normalized() if away.length_squared() > 0.0001 else -facing
+	hurt_t = hurt_time
+	_flash_t = 0.18
+	_recoil = away * (0.12 if mounted else 0.25)
+	if not mounted:
+		_knock = away * hurt_knockback * clampf(amount / 15.0, 0.5, 1.3)
+		# 蓄力中被打會被打斷（揮出後就不會）
+		if attack_phase == AttackPhase.WINDUP:
+			attack_phase = AttackPhase.NONE
+			_attack_buffered = false
 	damaged.emit(amount)
 	if hp <= 0.0:
 		hp = 0.0
@@ -181,6 +205,7 @@ func rider_anim_row() -> int:
 # ---------------------------------------------------------------------------
 func _physics_process(delta: float) -> void:
 	_update_debug_sweeps(delta)
+	hurt_t = maxf(hurt_t - delta, 0.0)
 	if dead:
 		_respawn_timer -= delta
 		if _respawn_timer <= 0.0:
@@ -211,31 +236,41 @@ func _physics_process(delta: float) -> void:
 	if _mount_t >= 0.0:
 		_update_mount_transition(delta)
 	elif mounted:
+		# 騎馬：馬不能平移，W 往鏡頭方向、A/D 轉彎（馬會轉向輸入方向），朝向 = 馬頭方向
 		horse.set_drive(dir, sprint)
 		global_position = horse.global_position
 		facing = horse.forward()
 	else:
-		_move_on_foot(dir, sprint, delta)
+		_move_on_foot(dir, input, sprint, delta)
 
 	_update_attack(delta)
 	_store_pos()
 
 
-func _move_on_foot(dir: Vector3, sprint: bool, delta: float) -> void:
-	var spd := run_speed if sprint else walk_speed
+## 步行：朝向由滑鼠（相機）決定，WASD 只決定相對相機的前後左右，不改朝向 → 可以邊打邊後退。
+## 往後退與平移比較慢；只有往前時才能奔跑。
+func _move_on_foot(dir: Vector3, input: Vector2, sprint: bool, delta: float) -> void:
+	if cam_rig and attack_phase != AttackPhase.SWING and attack_phase != AttackPhase.RECOVER:
+		facing = cam_rig.flat_forward()      # 揮出後到收招前鎖定，掃掠弧線才不會被滑鼠甩歪
+	var can_run := sprint and input.y > 0.3
+	var spd := run_speed if can_run else walk_speed
+	if input.length() > 0.01:
+		var n := input.normalized()
+		spd *= lerpf(1.0, back_speed_scale if n.y < 0.0 else strafe_speed_scale, minf(absf(n.y) if n.y < 0.0 else absf(n.x), 1.0))
 	if attack_phase != AttackPhase.NONE:
-		spd *= 0.4
+		spd *= 0.55
+	if hurt_t > 0.0:
+		spd *= 0.3
 	var dl := Vector2(dir.x, dir.z).length()
 	if terrain and dl > 0.1:
 		spd *= terrain.move_factor(global_position.x, global_position.z, dir.x / dl, dir.z / dl)
-	velocity.x = dir.x * spd
-	velocity.z = dir.z * spd
+	velocity.x = dir.x * spd + _knock.x
+	velocity.z = dir.z * spd + _knock.z
+	_knock = _knock.move_toward(Vector3.ZERO, 18.0 * delta)
 	if is_on_floor():
 		velocity.y = -1.0
 	else:
 		velocity.y -= gravity * delta
-	if dir.length() > 0.1 and attack_phase == AttackPhase.NONE:
-		facing = Vector3(dir.x, 0, dir.z).normalized()
 	move_and_slide()
 	if terrain:
 		global_position = terrain.clamp_to_map(global_position, 3.0)
@@ -431,14 +466,23 @@ func _update_debug_sweeps(delta: float) -> void:
 
 
 # ---------------------------------------------------------------------------
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	var cam := get_viewport().get_camera_3d()
+	# 命中停頓的那一幀 time_scale 會突然變小，換算回真實時間要設上限，否則閃紅會一幀就結束
+	var real_dt := minf(delta / maxf(Engine.time_scale, 0.001), 0.05)
+	_flash_t = maxf(_flash_t - real_dt, 0.0)
+	_recoil = _recoil.lerp(Vector3.ZERO, minf(1.0, real_dt * 12.0))
+	var tint := Color(1.0, 0.35, 0.3) if _flash_t > 0.0 else Color.WHITE
 	var show_foot := not is_seated()
 	visual.visible = show_foot
+	if horse and horse.visual:
+		horse.visual.set_attach_tint(tint)
 	if not show_foot:
 		return
+	visual.set_tint(tint)
+	var vp := visual_position() + _recoil
 	if _baked:
-		visual.update_visual(visual_position(), facing, cam, _baked_foot_row())
+		visual.update_visual(vp, facing, cam, _baked_foot_row())
 		return
 	var row := PlaceholderArt.ROW_IDLE
 	if dead:
@@ -447,4 +491,4 @@ func _process(_delta: float) -> void:
 		row = PlaceholderArt.ROW_ATTACK
 	elif Vector2(velocity.x, velocity.z).length() > 0.3:
 		row = PlaceholderArt.ROW_WALK if int(_walk_phase / 0.6) % 2 == 0 else PlaceholderArt.ROW_IDLE
-	visual.update_visual(visual_position(), facing, cam, row)
+	visual.update_visual(vp, facing, cam, row)

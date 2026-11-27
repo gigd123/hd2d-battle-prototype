@@ -99,6 +99,21 @@ func setup_attach_baked(bs: BakedSpriteSet, layer_names: Array, p_parent_point: 
 		attach_overlays[layer_names[i]] = s
 
 
+## 整個角色（含疊加層）乘上顏色：受擊閃紅等
+func set_tint(c: Color) -> void:
+	for n in get_children():
+		if n is Sprite3D:
+			(n as Sprite3D).modulate = c
+
+
+## 只染附掛圖層（騎士）
+func set_attach_tint(c: Color) -> void:
+	if attach_sprite:
+		attach_sprite.modulate = c
+	for k in attach_overlays:
+		(attach_overlays[k] as Sprite3D).modulate = c
+
+
 func set_attach_visible(v: bool) -> void:
 	if attach_sprite:
 		attach_sprite.visible = v
@@ -115,6 +130,11 @@ func update_visual(world_pos: Vector3, facing: Vector3, cam: Camera3D, main_row:
 	last_column = dir.x
 	last_flip = dir.y == 1
 	var bb := GameConfig.billboard_mode()
+	var st := GameConfig.billboard_stretch(cam)
+	var sc := Vector3(1.0, st, 1.0)
+	for n in get_children():
+		if n is Sprite3D:
+			(n as Sprite3D).scale = sc
 	main_sprite.global_position = world_pos
 	main_sprite.frame = main_row * 8 + dir.x
 	main_sprite.flip_h = last_flip
@@ -140,7 +160,8 @@ func update_visual(world_pos: Vector3, facing: Vector3, cam: Camera3D, main_row:
 		var up := cam_basis.y if GameConfig.full_billboard else Vector3.UP
 		var right := cam_basis.x if GameConfig.full_billboard else cam_right
 		last_attach_origin = world_pos + right * p.x + up * p.y
-		var pos := world_pos + right * (p.x - c.x) + up * (p.y - c.y) + to_cam * (LAYER_GAP * layer)
+		last_attach_origin = world_pos + right * p.x + up * p.y * st
+		var pos := world_pos + right * (p.x - c.x) + up * (p.y - c.y) * st + to_cam * (LAYER_GAP * layer)
 		attach_sprite.global_position = pos
 		attach_sprite.frame = attach_row * 8 + dir.x
 		attach_sprite.flip_h = last_flip
