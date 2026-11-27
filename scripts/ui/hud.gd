@@ -20,7 +20,7 @@ func _ready() -> void:
 		"WASD 移動　Shift 奔跑/奔馳　E 上馬/下馬　左鍵/空白 揮擊",
 		"滑鼠 旋轉相機　滾輪 縮放　Esc 釋放滑鼠",
 		"1 全軍衝鋒　2 在此集結（守位）　3 跟隨我",
-		"R 重開戰局　F2 切換方向數　F3 除錯繪製　F4 士兵畫面後端　F5 後製效果",
+		"R 重開戰局　F2 切換方向數　F3 除錯繪製　F4 士兵畫面後端　F5 後製效果　F6 Billboard 方式",
 	])
 	_toast = _make_label(Vector2(0, 120), 22)
 	_toast.anchor_left = 0.5
@@ -56,7 +56,7 @@ func _process(delta: float) -> void:
 		Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0])
 	if battle != null:
 		lines.append(battle.call("stats_text"))
-	lines.append("方向：%s　士兵畫面：%s　後製：%s" % [GameConfig.direction_mode_name(), GameConfig.backend_name(), "開" if GameConfig.postfx_enabled else "關"])
+	lines.append("方向：%s　士兵畫面：%s　Billboard：%s　後製：%s" % [GameConfig.direction_mode_name(), GameConfig.backend_name(), "面向相機" if GameConfig.full_billboard else "Y 軸", "開" if GameConfig.postfx_enabled else "關"])
 	if player:
 		var state := "騎馬" if player.mounted else "步行"
 		if player.dead:

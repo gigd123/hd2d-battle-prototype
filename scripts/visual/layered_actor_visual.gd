@@ -33,7 +33,7 @@ static func make_sprite(tex: Texture2D, frame_size: Vector2i, rows: int) -> Spri
 	s.hframes = 8
 	s.vframes = rows
 	s.pixel_size = PlaceholderArt.PIXEL_SIZE
-	s.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	s.billboard = GameConfig.billboard_mode()
 	s.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 	s.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	s.shaded = false
@@ -83,6 +83,10 @@ func update_visual(world_pos: Vector3, facing: Vector3, cam: Camera3D, main_row:
 	var dir := DirectionUtil.resolve(facing, cam_basis)
 	last_column = dir.x
 	last_flip = dir.y == 1
+	if main_sprite.billboard != GameConfig.billboard_mode():
+		main_sprite.billboard = GameConfig.billboard_mode()
+		if attach_sprite:
+			attach_sprite.billboard = GameConfig.billboard_mode()
 	main_sprite.global_position = world_pos
 	main_sprite.frame = main_row * 8 + dir.x
 	main_sprite.flip_h = last_flip
@@ -95,8 +99,11 @@ func update_visual(world_pos: Vector3, facing: Vector3, cam: Camera3D, main_row:
 		var p := main_anchors.to_offset(main_anchors.get_point(parent_point, dir.x, main_row), last_flip)
 		var c := attach_anchors.to_offset(attach_anchors.get_point(child_point, dir.x, attach_row), last_flip)
 		var layer := main_anchors.layer_for(dir.x)
-		last_attach_origin = world_pos + cam_right * p.x + Vector3.UP * p.y
-		var pos := world_pos + cam_right * (p.x - c.x) + Vector3.UP * (p.y - c.y) + to_cam * (LAYER_GAP * layer)
+		# 錨點的「上」方向要跟 Billboard 方式一致，騎士才會黏在鞍上
+		var up := cam_basis.y if GameConfig.full_billboard else Vector3.UP
+		var right := cam_basis.x if GameConfig.full_billboard else cam_right
+		last_attach_origin = world_pos + right * p.x + up * p.y
+		var pos := world_pos + right * (p.x - c.x) + up * (p.y - c.y) + to_cam * (LAYER_GAP * layer)
 		attach_sprite.global_position = pos
 		attach_sprite.frame = attach_row * 8 + dir.x
 		attach_sprite.flip_h = last_flip

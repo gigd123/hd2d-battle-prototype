@@ -19,6 +19,9 @@ const MAX_DIRECTIONS := 8
 
 var direction_mode: int = DirectionMode.DIR_8
 var soldier_backend: int = SoldierBackend.SPRITE3D
+## Billboard 方式：false = Y 軸（直立紙片，報告建議的起點）；true = 完全面向相機。
+## 相機俯角大時，Y 軸 Billboard 在畫面邊緣會有透視傾斜；兩種都保留，F6 切換比較。
+var full_billboard := false
 ## 後製效果（景深、泛光、SSAO、霧）。壓力測試可關閉以比較。
 var postfx_enabled := true
 ## 固定亂數種子：同一種子重跑，戰場生成與 AI 隨機值一致（便於比較）。
@@ -50,6 +53,8 @@ func _parse_dev_args() -> void:
 			scenario = a.get_slice("=", 1)
 		elif a.begins_with("--shots="):
 			shots = a.get_slice("=", 1)
+		elif a == "--full-billboard":
+			full_billboard = true
 		elif a == "--debug-draw":
 			debug_draw = true
 	if scenario != "":
@@ -88,6 +93,10 @@ func cycle_direction_mode() -> void:
 	direction_mode_changed.emit()
 
 
+func billboard_mode() -> BaseMaterial3D.BillboardMode:
+	return BaseMaterial3D.BILLBOARD_ENABLED if full_billboard else BaseMaterial3D.BILLBOARD_FIXED_Y
+
+
 func backend_name() -> String:
 	return "MultiMesh" if soldier_backend == SoldierBackend.MULTIMESH else "Sprite3D"
 
@@ -111,6 +120,7 @@ func _setup_input_map() -> void:
 	_add_keys("cycle_directions", [KEY_F2])
 	_add_keys("toggle_backend", [KEY_F4])
 	_add_keys("toggle_postfx", [KEY_F5])
+	_add_keys("toggle_billboard", [KEY_F6])
 	_add_keys("restart_battle", [KEY_R])
 	_add_keys("release_mouse", [KEY_ESCAPE])
 	_add_mouse("zoom_in", MOUSE_BUTTON_WHEEL_UP)

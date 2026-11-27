@@ -11,6 +11,10 @@ var horse: Horse
 var player: PlayerController
 var hud: BattleHUD
 var debug_draw: DebugDraw
+var battle: BattleManager
+
+## 每方士兵人數（總人數 = 2 倍）
+@export var soldiers_per_team := 50
 
 ## 壓力測試模式：不建立玩家輸入，相機自動繞場
 var stress_mode := false
@@ -32,14 +36,30 @@ func _ready() -> void:
 
 	_spawn_player_and_horse(Vector3(-30, 0, 0))
 
+	battle = BattleManager.new()
+	battle.name = "BattleManager"
+	battle.auto_charge_both = stress_mode
+	add_child(battle)
+	battle.setup(terrain, null if stress_mode else player)
+	battle.set_renderer(make_renderer())
+	battle.spawn_armies(soldiers_per_team)
+	battle.battle_finished.connect(_on_battle_finished)
+	if not stress_mode:
+		horse.battle = battle
+		player.battle = battle
+		player.hit_landed.connect(_on_hit_landed)
+
 	debug_draw = DebugDraw.new()
 	debug_draw.name = "DebugDraw"
 	debug_draw.player = player
+	debug_draw.battle = battle
 	add_child(debug_draw)
 
 	hud = BattleHUD.new()
 	hud.name = "HUD"
 	hud.player = player
+	hud.battle = battle
+	hud.visible = not stress_mode
 	add_child(hud)
 
 	apply_postfx()
@@ -82,9 +102,59 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif event.is_action_pressed("cycle_directions"):
 		GameConfig.cycle_direction_mode()
+	elif event.is_action_pressed("toggle_debug"):
+		GameConfig.debug_draw = not GameConfig.debug_draw
+	elif event.is_action_pressed("toggle_backend"):
+		GameConfig.soldier_backend = 1 - GameConfig.soldier_backend
+		restart_battle()
+		hud.toast("士兵畫面後端：" + GameConfig.backend_name())
+	elif event.is_action_pressed("restart_battle"):
+		restart_battle()
+		hud.toast("重開戰局")
+	elif event.is_action_pressed("order_charge"):
+		_order(BattleManager.Order.CHARGE, "全軍衝鋒！")
+	elif event.is_action_pressed("order_hold"):
+		_order(BattleManager.Order.HOLD, "在此集結！")
+	elif event.is_action_pressed("order_follow"):
+		_order(BattleManager.Order.FOLLOW, "跟隨我！")
+	elif event.is_action_pressed("toggle_billboard"):
+		GameConfig.full_billboard = not GameConfig.full_billboard
+		hud.toast("Billboard：" + ("完全面向相機" if GameConfig.full_billboard else "Y 軸直立"))
 	elif event.is_action_pressed("toggle_postfx"):
 		GameConfig.postfx_enabled = not GameConfig.postfx_enabled
 		apply_postfx()
+
+
+static func make_renderer() -> SoldierRenderer:
+	if GameConfig.soldier_backend == GameConfig.SoldierBackend.MULTIMESH:
+		return MultiMeshSoldierRenderer.new()
+	return SpriteSoldierRenderer.new()
+
+
+func restart_battle() -> void:
+	seed(GameConfig.battle_seed)
+	battle.rng.seed = GameConfig.battle_seed
+	battle.set_renderer(make_renderer())
+	battle.spawn_armies(soldiers_per_team)
+	if player:
+		player.hp = player.max_hp
+
+
+func _order(order: int, text: String) -> void:
+	if stress_mode or player == null:
+		return
+	# 命令只是寫入佇列；集結點 = 玩家目前位置，面向玩家朝向
+	battle.issue_order(0, order, player.global_position, player.facing)
+	hud.toast(text)
+
+
+func _on_hit_landed(hits: int, dmg: float) -> void:
+	hud.toast("命中 %d 人　傷害 %d" % [hits, dmg], 0.8)
+
+
+func _on_battle_finished(winner: int) -> void:
+	if hud:
+		hud.toast(("我軍勝利！" if winner == 0 else "敵軍勝利！") + "（按 R 重開）", 5.0)
 
 
 func apply_postfx() -> void:

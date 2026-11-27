@@ -35,6 +35,22 @@ func setup(scenario: String) -> void:
 				[10.0, "shot", "06_dismounted"],
 				[10.2, "quit", ""],
 			]
+		"battle":
+			# 玩家完全不操作，觀察戰鬥能否自行分出勝負（每 10 秒印一次戰況）
+			for k in range(1, 25):
+				steps.append([k * 10.0, "report", ""])
+			steps.append([240.0, "quit", ""])
+		"command":
+			# 騎馬中下命令：衝鋒 → 跟隨 → 集結，並截圖
+			steps = [
+				[0.1, "cam", "26"],
+				[0.6, "hold", "move_right"], [1.0, "release", "move_right"], [1.1, "tap", "interact"],
+				[1.8, "tap", "order_charge"], [2.0, "hold", "move_forward"], [3.5, "hold", "sprint"],
+				[6.0, "shot", "10_charge"], [6.5, "tap", "attack"], [7.0, "tap", "attack"],
+				[8.0, "shot", "11_melee"], [8.5, "tap", "order_follow"], [9.0, "hold", "move_left"],
+				[11.0, "shot", "12_follow"], [11.5, "release", "move_left"], [12.0, "tap", "order_hold"],
+				[14.0, "shot", "13_hold"], [14.0, "report", ""], [14.2, "quit", ""],
+			]
 		_:
 			steps = [[0.5, "quit", ""]]
 
@@ -55,15 +71,29 @@ func _run(step: Array) -> void:
 		"release":
 			Input.action_release(arg)
 		"tap":
+			# 同時送出輸入事件（_unhandled_input 用）與動作狀態（Input.is_action_* 用）
+			var ev := InputEventAction.new()
+			ev.action = arg
+			ev.pressed = true
+			Input.parse_input_event(ev)
 			Input.action_press(arg)
 			await get_tree().physics_frame
 			await get_tree().physics_frame
 			Input.action_release(arg)
+		"cam":
+			var rig: Node = get_tree().current_scene.get("cam_rig")
+			rig.set("distance", float(arg))
 		"shot":
 			await RenderingServer.frame_post_draw
 			DirAccess.make_dir_recursive_absolute(shots_dir)
 			var img := get_viewport().get_texture().get_image()
 			img.save_png(shots_dir.path_join(arg + ".png"))
 			print("[scenario] shot ", arg)
+		"report":
+			var bf := get_tree().current_scene
+			var bm: Node = bf.get("battle")
+			print("[scenario] t=%.0f  %s" % [_t, bm.call("stats_text").replace("\n", " | ")])
+			if int(bm.get("winner")) != -1:
+				get_tree().quit()
 		"quit":
 			get_tree().quit()
