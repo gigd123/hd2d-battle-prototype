@@ -24,7 +24,7 @@ const DEFAULT := {
 	"block": 0.0, "arrow_mult": 1.0, "reach": 1.5, "dmg_min": 10.0, "dmg_max": 15.0,
 	"cd_min": 1.2, "cd_max": 1.8, "arc_deg": 100.0, "max_targets": 2, "accuracy": 0.75,
 	"min_dist": 0.0, "close_mult": 1.0, "backoff": false, "knock": 1.0, "vs_cavalry": 1.0,
-	"charge_mult": 1.0,
+	"charge_mult": 1.0, "hidden": false,
 }
 
 const ALL := [
@@ -57,10 +57,16 @@ const ALL := [
 	{"id": "cav_sword", "name": "劍＋盾", "unit": 2, "layer": "sword", "anim": "swing", "shield": true,
 		"block": 0.3, "arrow_mult": 0.6, "reach": 1.9, "dmg_min": 11.0, "dmg_max": 16.0,
 		"cd_min": 0.9, "cd_max": 1.3, "arc_deg": 110.0, "max_targets": 2},
+	# --- 攻城戰專用（hidden：不出現在選單）：沿用攻城平衡版本的數值，長槍兵與騎兵的盾不擋 ---
+	{"id": "siege_spear", "name": "長槍＋盾（攻城）", "unit": 0, "layer": "spear", "anim": "thrust", "shield": true, "hidden": true,
+		"reach": 2.1, "dmg_min": 9.0, "dmg_max": 14.0, "arc_deg": 30.0, "max_targets": 1,
+		"min_dist": 1.0, "close_mult": 0.5, "backoff": true},
+	{"id": "siege_lance", "name": "騎槍＋盾（攻城）", "unit": 2, "layer": "spear", "anim": "thrust", "shield": true, "hidden": true,
+		"reach": 2.0, "dmg_min": 11.0, "dmg_max": 16.0, "arc_deg": 40.0, "max_targets": 1},
 	# --- 攻城戰守方的劍盾兵（數值沿用攻城平衡版本） ---
 	{"id": "siege_sword_shield", "name": "劍盾兵", "unit": 3, "layer": "sword", "anim": "swing", "shield": true,
 		"block": 0.4, "arrow_mult": 0.5, "reach": 1.5, "dmg_min": 10.0, "dmg_max": 15.0,
-		"cd_min": 0.85, "cd_max": 1.25, "arc_deg": 110.0, "max_targets": 1},
+		"cd_min": 0.85, "cd_max": 1.25, "arc_deg": 110.0, "max_targets": 1, "hidden": true},
 ]
 
 static var _resolved: Array = []
@@ -90,9 +96,19 @@ static func index_of(id: String) -> int:
 static func options_for(unit: int) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	for i in ALL.size():
-		if int(ALL[i]["unit"]) == unit:
+		if int(ALL[i]["unit"]) == unit and not ALL[i].get("hidden", false):
 			out.append(i)
 	return out
+
+
+## 攻城戰的預設配置（保留攻城平衡時的數值）
+static func siege_default_for(unit: int) -> int:
+	match unit:
+		0:
+			return index_of("siege_spear")
+		2:
+			return index_of("siege_lance")
+	return default_for(unit)
 
 
 ## 兵種的預設配置（沿用改版前的裝備：步兵長槍盾、弓兵弓、騎兵騎槍盾、劍盾兵）
@@ -110,6 +126,6 @@ static func default_for(unit: int) -> int:
 ## 配置 id 轉編號；找不到或不屬於該兵種時退回該兵種的預設
 static func resolve(id: String, unit: int) -> int:
 	var i := index_of(id)
-	if i < 0 or int(ALL[i]["unit"]) != unit:
+	if i < 0 or int(ALL[i]["unit"]) != unit or ALL[i].get("hidden", false):
 		return default_for(unit)
 	return i

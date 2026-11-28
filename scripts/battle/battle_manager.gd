@@ -477,7 +477,9 @@ func _clear() -> void:
 func _add_squad(t: int, anchor: Vector3, fwd: Vector3, ut: int = UnitType.INFANTRY, loadout := -1) -> int:
 	squad_team.append(t)
 	squad_type.append(ut)
-	squad_lo.append(loadout if loadout >= 0 else UnitDefs.default_for(ut))
+	if loadout < 0:
+		loadout = UnitDefs.siege_default_for(ut) if siege != null else UnitDefs.default_for(ut)
+	squad_lo.append(loadout)
 	squad_order.append(Order.CHARGE if auto_charge_both else Order.HOLD)
 	squad_anchor.append(anchor)
 	squad_facing.append(fwd)
