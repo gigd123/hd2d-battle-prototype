@@ -39,6 +39,8 @@ var obstacles: Array[Vector3] = []
 var water_level := -INF
 ## 地面本身的移動倍率（雪地 < 1）
 var ground_speed := 1.0
+## 攻城戰：城牆附近壓平（城牆在 x = 8～12，見 SiegeMap），岩石與樹避開城內
+var siege_layout := false
 
 const OB_CELL := 8.0
 var _ob_grid: Array = []           # 每格一個 Array[Vector3]
@@ -204,6 +206,10 @@ func _height_at(x: float, z: float) -> float:
 	var r := Vector2(x, z).length() / _half
 	var n := _noise.get_noise_2d(x, z)
 	var h := 0.0
+	if siege_layout:
+		h = n * 1.6 * smoothstep(14.0, 36.0, absf(x - 10.0))
+		h += pow(smoothstep(0.8, 1.0, maxf(absf(x), absf(z)) / _half), 2.0) * 18.0
+		return h
 	match terrain_type:
 		Type.PLAINS:
 			h = n * 2.2 * lerpf(0.4, 1.0, smoothstep(0.2, 0.8, r))
@@ -359,7 +365,9 @@ void fragment() {
 	mat.set_shader_parameter("color", Color(0.52, 0.50, 0.48) if terrain_type != Type.SNOW else Color(0.46, 0.46, 0.50))
 	occluder_materials.append(mat)
 	var spots := [Vector2(-8, 14), Vector2(6, -16), Vector2(-22, -6), Vector2(20, 18), Vector2(-4, -30), Vector2(-30, 24)]
-	if terrain_type == Type.PLAINS:
+	if siege_layout:
+		spots = [Vector2(-34, 40), Vector2(-42, -44), Vector2(-56, 10)]
+	elif terrain_type == Type.PLAINS:
 		spots = [Vector2(-8, 14), Vector2(20, 18), Vector2(-4, -30)]
 	elif terrain_type == Type.SNOW or terrain_type == Type.HILLS:
 		spots.append_array([Vector2(28, -22), Vector2(34, 10), Vector2(-40, -18)])
@@ -417,6 +425,8 @@ func _build_trees() -> void:
 		var x := rng.randf_range(-_half + 6, _half - 6)
 		var z := rng.randf_range(-_half + 6, _half - 6)
 		if Vector2(x, z).length() < 45.0 or water_depth(x, z) > 0.0:
+			continue
+		if siege_layout and x > -4.0:
 			continue
 		decor.append(Vector3(x, get_height(x, z) - 0.2, z))
 

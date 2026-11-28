@@ -12,6 +12,7 @@ var player: PlayerController
 var hud: BattleHUD
 var debug_draw: DebugDraw
 var battle: BattleManager
+var siege_map: SiegeMap = null          # 攻城戰時才有
 
 ## 每方士兵人數（總人數 = 2 倍）
 @export var soldiers_per_team := 50
@@ -27,25 +28,45 @@ func _ready() -> void:
 	terrain.name = "Terrain"
 	terrain.seed_value = GameConfig.battle_seed
 	terrain.terrain_type = GameConfig.terrain_type
+	if GameConfig.siege_mode:
+		terrain.siege_layout = true
+		terrain.terrain_type = BattleTerrain.Type.PLAINS
+		if GameConfig.siege_side < 0:
+			GameConfig.siege_side = 0
+			_show_side_picker()
 	add_child(terrain)
 	terrain.build()
 	_apply_terrain_environment()
+	if GameConfig.siege_mode:
+		siege_map = SiegeMap.new()
+		siege_map.name = "Siege"
+		add_child(siege_map)
+		siege_map.build(terrain)
 
 	cam_rig = OrbitFollowCamera.new()
 	cam_rig.name = "CameraRig"
 	cam_rig.terrain = terrain
 	add_child(cam_rig)
 
-	_spawn_player_and_horse(Vector3(-30, 0, 0))
+	if siege_map and GameConfig.siege_side == 1:
+		_spawn_player_and_horse(Vector3(22, 0, -9))
+	elif siege_map:
+		_spawn_player_and_horse(Vector3(-50, 0, 6))
+	else:
+		_spawn_player_and_horse(Vector3(-30, 0, 0))
+	if siege_map:
+		_place_player_for_siege()
 
 	battle = BattleManager.new()
 	battle.name = "BattleManager"
 	battle.auto_charge_both = stress_mode
 	add_child(battle)
 	battle.setup(terrain, null if stress_mode else player)
+	battle.siege = siege_map
 	battle.set_renderer(make_renderer())
-	battle.spawn_armies(soldiers_per_team)
+	_spawn_soldiers()
 	battle.battle_finished.connect(_on_battle_finished)
+	battle.siege_event.connect(func(t: String): if hud: hud.toast(t, 3.0))
 	if not stress_mode:
 		horse.battle = battle
 		player.battle = battle
@@ -77,8 +98,15 @@ func _ready() -> void:
 		cam_rig.distance = 38.0
 		cam_rig.pitch_deg = 40.0
 	else:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-		hud.toast("場地：%s　%s（F8 換場地／F9 隨機）" % [terrain.type_name(), BattleTerrain.TYPE_HINTS[terrain.terrain_type]], 4.0)
+		if _picker == null:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		if siege_map:
+			if GameConfig.siege_side == 0:
+				hud.toast("攻城戰：你是攻方（400 人）。三道雲梯已架好，攻城槌往城門推進（F11 換守方）", 5.0)
+			else:
+				hud.toast("攻城戰：你是守方（200 人）。守住城牆與城門 10 分鐘（F11 換攻方）", 5.0)
+		else:
+			hud.toast("場地：%s　%s（F8 換場地／F9 隨機／F10 攻城戰）" % [terrain.type_name(), BattleTerrain.TYPE_HINTS[terrain.terrain_type]], 4.0)
 
 
 func _spawn_player_and_horse(at: Vector3) -> void:
@@ -119,10 +147,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("toggle_debug"):
 		GameConfig.debug_draw = not GameConfig.debug_draw
 	elif event.is_action_pressed("next_terrain"):
+		GameConfig.siege_mode = false
 		GameConfig.next_terrain()
 		get_tree().reload_current_scene()
 	elif event.is_action_pressed("random_terrain"):
+		GameConfig.siege_mode = false
 		GameConfig.random_terrain()
+		get_tree().reload_current_scene()
+	elif event.is_action_pressed("toggle_siege"):
+		GameConfig.siege_mode = not GameConfig.siege_mode
+		GameConfig.siege_side = -1
+		get_tree().reload_current_scene()
+	elif event.is_action_pressed("swap_siege_side") and siege_map:
+		GameConfig.siege_side = 1 - GameConfig.siege_side
 		get_tree().reload_current_scene()
 	elif event.is_action_pressed("spectate"):
 		var on := cam_rig.toggle_spectate(battle_center())
@@ -162,9 +199,77 @@ func restart_battle() -> void:
 	seed(GameConfig.battle_seed)
 	battle.rng.seed = GameConfig.battle_seed
 	battle.set_renderer(make_renderer())
-	battle.spawn_armies(soldiers_per_team)
+	_spawn_soldiers()
 	if player:
 		player.hp = player.max_hp
+		if siege_map:
+			_place_player_for_siege()
+
+
+func _spawn_soldiers() -> void:
+	if siege_map:
+		# 玩家永遠是陣營 0：當攻方時陣營 0 = 攻方（400 人），當守方時陣營 0 = 守方（200 人）
+		battle.spawn_siege(0 if GameConfig.siege_side == 0 else 1, 400, 200)
+	else:
+		battle.spawn_armies(soldiers_per_team)
+
+
+## 攻城戰的玩家位置：攻方在大軍後方；守方站在第二道雲梯旁的牆頂，馬留在城內
+func _place_player_for_siege() -> void:
+	# 雲梯是 62° 的斜板，放寬玩家可走的坡度
+	player.floor_max_angle = deg_to_rad(64.0)
+	if GameConfig.siege_side == 1:
+		var p := Vector3(SiegeMap.WALK_X0 + 1.3, siege_map.wall_top() + 0.1, -9.0)
+		player.spawn_point = p
+		player.global_position = p
+		player.facing = Vector3(-1, 0, 0)
+		cam_rig.yaw = PI * 0.5           # 從城內看向城外（-X 方向）
+	else:
+		player.facing = Vector3(1, 0, 0)
+		cam_rig.yaw = -PI * 0.5
+	player.velocity = Vector3.ZERO
+
+
+var _picker: CanvasLayer = null
+
+
+## 攻城戰選邊畫面：暫停遊戲，選完重新載入
+func _show_side_picker() -> void:
+	_picker = CanvasLayer.new()
+	_picker.layer = 20
+	_picker.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_picker)
+	var bg := ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.55)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_picker.add_child(bg)
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_CENTER)
+	box.custom_minimum_size = Vector2(520, 0)
+	box.position = Vector2(-260, -130)
+	box.add_theme_constant_override("separation", 16)
+	_picker.add_child(box)
+	var title := Label.new()
+	title.text = "攻城戰：選擇陣營"
+	title.add_theme_font_size_override("font_size", 34)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	for side in [0, 1]:
+		var b := Button.new()
+		b.text = "攻城方（400 人：雲梯 ×3、攻城槌）" if side == 0 else "守城方（200 人：城牆、城門，撐 10 分鐘）"
+		b.add_theme_font_size_override("font_size", 22)
+		b.custom_minimum_size = Vector2(520, 56)
+		b.pressed.connect(func():
+			GameConfig.siege_side = side
+			get_tree().paused = false
+			get_tree().reload_current_scene())
+		box.add_child(b)
+	var hint := Label.new()
+	hint.text = "遊戲中按 F11 換邊、F10 回到野戰"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(hint)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().paused = true
 
 
 func _order(order: int, text: String) -> void:

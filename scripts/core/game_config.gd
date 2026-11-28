@@ -41,6 +41,10 @@ var terrain_type := 1
 ## 俯角補償（0 = 關，1 = 完全補償）：Y 軸 Billboard 是直立紙片，相機越往下看，畫面上就越扁。
 ## 依相機俯角把角色往上拉長，讓俯視時比例接近正常。完全面向相機模式本來就不會扁，不套用。
 var pitch_compensation := 0.85
+## 攻城戰：F10 切換野戰 ⇄ 攻城戰；siege_side：0 = 玩家當攻方（400 人）、1 = 守方（200 人）、-1 = 還沒選（開局先跳選邊畫面）
+## 啟動參數 --siege=attack|defend 直接進入
+var siege_mode := false
+var siege_side := -1
 
 
 func _ready() -> void:
@@ -71,6 +75,9 @@ func _parse_dev_args() -> void:
 			full_billboard = true
 		elif a == "--debug-draw":
 			debug_draw = true
+		elif a.begins_with("--siege="):
+			siege_mode = true
+			siege_side = 1 if a.get_slice("=", 1) == "defend" else 0
 		elif a.begins_with("--art="):
 			art_mode = ArtMode.PLACEHOLDER if a.get_slice("=", 1) == "placeholder" else ArtMode.BAKED
 	if scenario != "":
@@ -179,6 +186,8 @@ func _setup_input_map() -> void:
 	_add_keys("next_terrain", [KEY_F8])
 	_add_keys("random_terrain", [KEY_F9])
 	_add_keys("spectate", [KEY_V])             # 觀戰鏡頭
+	_add_keys("toggle_siege", [KEY_F10])       # 野戰 ⇄ 攻城戰
+	_add_keys("swap_siege_side", [KEY_F11])    # 攻城戰：攻方 ⇄ 守方（重開）
 
 
 func _add_keys(action: StringName, keys: Array) -> void:

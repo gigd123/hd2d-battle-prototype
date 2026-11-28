@@ -23,7 +23,7 @@ func _ready() -> void:
 		"滑鼠 旋轉相機　滾輪 縮放　Esc 釋放滑鼠",
 		"1 全軍衝鋒　2 在此集結（守位）　3 跟隨我",
 		"R 重開戰局　F2 切換方向數　F3 除錯繪製　F4 士兵畫面後端　F5 後製效果　F6 Billboard 方式",
-		"F8 換場地　F9 隨機場地　V 觀戰鏡頭",
+		"F8 換場地　F9 隨機場地　V 觀戰鏡頭　F10 野戰 ⇄ 攻城戰　F11 攻城戰換邊",
 	])
 	_help.offset_top = -235
 	_crosshair = _make_label(Vector2.ZERO, 26)

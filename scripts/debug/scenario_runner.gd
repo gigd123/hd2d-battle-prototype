@@ -36,6 +36,24 @@ func setup(scenario: String) -> void:
 				[10.0, "shot", "06_dismounted"],
 				[10.2, "quit", ""],
 			]
+		"siege":
+			# 攻城戰：玩家不操作，每 10 秒印一次戰況，分出勝負或時間到就結束
+			for k in range(1, 62):
+				steps.append([k * 10.0, "report", ""])
+			steps.append([620.0, "quit", ""])
+		"siege_shots":
+			# 攻城戰截圖：俯瞰城牆與雲梯、攻城槌、牆頂近景
+			steps = [
+				[0.2, "overview_at", "6,-6,44,-2.2"],
+				[3.0, "shot", "s01_overview"],
+				[20.0, "shot", "s02_assault"],
+				[21.0, "overview_at", "4,-20,22,-2.0"],
+				[40.0, "shot", "s03_ladders"],
+				[41.0, "overview_at", "2,0,20,-2.5"],
+				[70.0, "shot", "s04_ram"],
+				[71.0, "report", ""],
+				[71.5, "quit", ""],
+			]
 		"battle":
 			# 玩家完全不操作，觀察戰鬥能否自行分出勝負（每 10 秒印一次戰況）
 			for k in range(1, 25):
@@ -233,6 +251,10 @@ func _run(step: Array) -> void:
 			var bf := get_tree().current_scene
 			var bm: Node = bf.get("battle")
 			var pl: Node = bf.get("player")
+			if bm.get("siege") != null:
+				print("   ", bm.call("siege_debug"))
+				if _t > 295.0 and _t < 305.0:
+					print(bm.call("siege_debug_detail"))
 			print("[scenario] t=%.0f  玩家擊殺 %d 生命 %d  %s" % [_t, pl.get("total_kills"), pl.get("hp"), bm.call("stats_text").replace("\n", " | ")])
 			if int(bm.get("winner")) != -1:
 				get_tree().quit()
