@@ -21,7 +21,7 @@ func _create(bm: BattleManager) -> void:
 	_mms.clear()
 	_bufs.clear()
 	_mats.clear()
-	var counts := [0, 0, 0]
+	var counts := [0, 0, 0, 0]
 	_kind.resize(bm.count)
 	_slot.resize(bm.count)
 	for i in bm.count:
@@ -30,7 +30,7 @@ func _create(bm: BattleManager) -> void:
 		_slot[i] = counts[ut]
 		counts[ut] += 1
 	var shader: Shader = load("res://shaders/soldier_billboard.gdshader")
-	for ut in 3:
+	for ut in 4:
 		var art: SoldierArt = _arts[ut]
 		var frame := art.frame
 		var quad := QuadMesh.new()

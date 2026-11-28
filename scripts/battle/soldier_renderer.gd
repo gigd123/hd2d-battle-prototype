@@ -20,7 +20,7 @@ var _arts: Array[SoldierArt] = []
 func setup(bm: BattleManager) -> void:
 	_n = bm.count
 	_arts.clear()
-	for ut in 3:
+	for ut in 4:
 		_arts.append(SoldierArt.for_unit(ut))
 	_create(bm)
 	_setup_shadows(_n)

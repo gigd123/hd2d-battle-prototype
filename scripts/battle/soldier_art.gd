@@ -32,11 +32,13 @@ static func for_unit(ut: int) -> SoldierArt:
 	if _cache.has(key):
 		return _cache[key]
 	var a := SoldierArt.new()
-	a.unit = ut
+	# 劍盾兵（BattleManager.UnitType.SWORDSMAN = 3）的佔位圖沿用步兵
+	var pu := PlaceholderArt.Unit.INFANTRY if ut >= 3 else ut
+	a.unit = pu
 	if not a._try_baked(ut):
 		a.baked = false
-		a.frame = PlaceholderArt.unit_frame(ut)
-		a.rows = PlaceholderArt.unit_rows(ut)
+		a.frame = PlaceholderArt.unit_frame(pu)
+		a.rows = PlaceholderArt.unit_rows(pu)
 	_cache[key] = a
 	return a
 
@@ -131,6 +133,8 @@ func _try_baked(ut: int) -> bool:
 		var weapon := "spear" if ut == PlaceholderArt.Unit.INFANTRY and knight.has_layer("spear") else "sword"
 		if ut == PlaceholderArt.Unit.ARCHER and knight.has_layer("bow") and knight.has_action("bow_shoot"):
 			weapon = "bow"
+		if ut == 3:
+			weapon = "sword"      # 劍盾兵
 		_compose_foot(knight, weapon, weapon != "bow")
 	baked = true
 	return true
