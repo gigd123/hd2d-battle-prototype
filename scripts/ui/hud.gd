@@ -12,6 +12,9 @@ var _hitmark: Label                   # 箭射中時準心外圍閃一下的 ✕
 var _hittext: Label                   # 準心下方的「命中 32」「擊殺！」
 var _hit_t := 0.0
 var _toast_time := 0.0
+var _cmd: Label                       # 右上角：部隊指揮狀態
+## 由戰場每幀寫入（空字串就不顯示）
+var command_text := ""
 
 
 func _ready() -> void:
@@ -24,11 +27,19 @@ func _ready() -> void:
 		"WASD 移動　Shift 奔跑/奔馳　E 上馬/下馬　左鍵/空白 攻擊（弓：按住拉弓、放開射出）　右鍵/C 舉盾或格擋",
 		"Q／Z 換下一把／上一把武器　F 弓的瞄準視角：肩後 ⇄ 第一人稱",
 		"滑鼠 旋轉相機　滾輪 縮放　Esc 暫停／回選單",
-		"1 全軍衝鋒　2 在此集結（守位）　3 跟隨我",
+		"指揮　1 全軍 2 步兵 3 弓兵 4 騎兵（Shift 加選）　G 衝鋒　H 在此集結　T 跟隨我　B 移動到準心處　X 前進（Shift 後退）　N 攻擊準心處敵隊",
+		"陣型　5 橫隊　6 緊密　7 鬆散　8 楔形　9 保持陣型 開／關",
 		"R 重開戰局　F2 切換方向數　F3 除錯繪製　F4 士兵畫面後端　F5 後製效果　F6 Billboard 方式",
 		"F8 換場地　F9 隨機場地　V 觀戰鏡頭　F10 野戰 ⇄ 攻城戰　F11 攻城戰換邊",
 	])
-	_help.offset_top = -235
+	_help.offset_top = -255
+	_cmd = _make_label(Vector2.ZERO, 15)
+	_cmd.anchor_left = 1.0
+	_cmd.anchor_right = 1.0
+	_cmd.offset_left = -470
+	_cmd.offset_right = -12
+	_cmd.offset_top = 10
+	_cmd.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_crosshair = _make_label(Vector2.ZERO, 26)
 	_crosshair.text = "+"
 	_crosshair.anchor_left = 0.5
@@ -101,6 +112,8 @@ func toast(text: String, seconds := 1.5) -> void:
 func _process(delta: float) -> void:
 	_toast_time -= delta
 	_toast.visible = _toast_time > 0.0
+	_cmd.text = command_text
+	_cmd.visible = command_text != ""
 	_hit_t = maxf(_hit_t - delta / maxf(Engine.time_scale, 0.001), 0.0)
 	_hitmark.visible = _hit_t > 0.0
 	_hittext.visible = _hit_t > 0.0

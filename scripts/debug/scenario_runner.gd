@@ -157,6 +157,20 @@ func setup(scenario: String) -> void:
 				[0.0, "overview_at", "0,-22,30,1.2"], [0.3, "charge", ""],
 				[4.0, "shot", "cav_01"], [7.0, "shot", "cav_02"], [10.0, "shot", "cav_03"], [12.0, "quit", ""],
 			]
+		"orders":
+			# 部隊指揮：選兵種、換陣型、移動到準心處、前進、攻擊指定敵隊、保持陣型；每步印出指揮狀態
+			steps = [
+				[0.2, "camp", "30,40"], [0.5, "cmd", ""],
+				[1.0, "tap", "select_inf"], [1.1, "tap", "form_wedge"], [1.5, "cmd", ""],
+				[2.0, "tap", "select_arc"], [2.1, "tap", "toggle_keep"], [2.2, "tap", "order_advance"], [3.0, "cmd", ""],
+				[3.5, "tap", "select_cav"], [3.6, "tap", "order_move"], [4.0, "cmd", ""], [9.0, "cmd", ""],
+				[9.5, "shot", "o01_moves"],
+				[10.0, "tap", "select_all"], [10.1, "tap", "order_follow"], [10.2, "hold", "move_left"], [13.0, "release", "move_left"],
+				[13.5, "cmd", ""], [13.6, "shot", "o02_follow"],
+				[14.0, "tap", "select_inf"], [14.1, "tap", "order_attack"], [14.5, "cmd", ""],
+				[15.0, "tap", "select_cav"], [15.1, "tap", "order_charge"], [20.0, "cmd", ""], [20.1, "shot", "o03_attack"],
+				[20.5, "report", ""], [20.6, "quit", ""],
+			]
 		"spectate":
 			# 觀戰鏡頭：切換、截圖、切回
 			steps = [
@@ -339,6 +353,14 @@ func _run(step: Array) -> void:
 			await get_tree().physics_frame
 			await get_tree().physics_frame
 			Input.action_release(arg)
+		"cmd":
+			var cbf := get_tree().current_scene
+			var cbm: BattleManager = cbf.get("battle")
+			var lines: Array[String] = []
+			for sq in cbm.squad_count:
+				if cbm.squad_team[sq] == 0:
+					lines.append("%d:%s@(%.0f,%.0f)" % [sq, cbm.order_name(cbm.squad_order[sq]), cbm.squad_center[sq].x, cbm.squad_center[sq].z])
+			print("[orders t=%.1f] %s\n  %s" % [_t, (cbf.get("hud") as BattleHUD).command_text.replace("\n", " | "), " ".join(lines)])
 		"terrain":
 			GameConfig.terrain_type = BattleTerrain.type_from_key(arg)
 			get_tree().reload_current_scene()

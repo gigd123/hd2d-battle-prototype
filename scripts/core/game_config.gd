@@ -209,9 +209,22 @@ func _setup_input_map() -> void:
 	_add_keys("switch_weapon", [KEY_Q])       # 下一把武器
 	_add_keys("prev_weapon", [KEY_Z])         # 上一把武器
 	_add_keys("aim_view", [KEY_F])            # 弓的瞄準視角：第三人稱肩後 ⇄ 第一人稱
-	_add_keys("order_charge", [KEY_1])         # 全軍衝鋒
-	_add_keys("order_hold", [KEY_2])           # 在此集結（守位）
-	_add_keys("order_follow", [KEY_3])         # 跟隨我
+	# 部隊指揮：先選兵種（Shift 加選），再下命令；命令只對選取的兵種有效
+	_add_keys("select_all", [KEY_1])
+	_add_keys("select_inf", [KEY_2])
+	_add_keys("select_arc", [KEY_3])
+	_add_keys("select_cav", [KEY_4])
+	_add_keys("order_charge", [KEY_G])         # 衝鋒
+	_add_keys("order_hold", [KEY_H])           # 在此集結（守位）
+	_add_keys("order_follow", [KEY_T])         # 跟隨我
+	_add_keys("order_move", [KEY_B])           # 移動到準心指的地點（包抄、佔位）
+	_add_keys("order_advance", [KEY_X])        # 前進 15 公尺（Shift＋X 後退）
+	_add_keys("order_attack", [KEY_N])         # 攻擊準心附近的敵方小隊
+	_add_keys("form_line", [KEY_5])
+	_add_keys("form_tight", [KEY_6])
+	_add_keys("form_loose", [KEY_7])
+	_add_keys("form_wedge", [KEY_8])
+	_add_keys("toggle_keep", [KEY_9])          # 保持陣型 開／關
 	_add_keys("toggle_debug", [KEY_F3])
 	_add_keys("cycle_directions", [KEY_F2])
 	_add_keys("toggle_backend", [KEY_F4])

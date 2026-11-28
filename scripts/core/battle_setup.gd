@@ -14,7 +14,7 @@ const TESTED_TOTAL := 400
 
 ## 非玩家控制的一方怎麼打
 enum AiMode { NORMAL, CHARGE, HOLD }
-const AI_MODE_NAMES := ["一般（約 10 秒後或被逼近時衝鋒）", "開戰立即衝鋒", "守位（敵人逼近才迎戰）"]
+const AI_MODE_NAMES := ["一般（列隊推進，接近後衝鋒）", "開戰立即衝鋒", "守位（敵人逼近才迎戰）"]
 
 ## 玩家陣營：0 藍、1 紅、-1 觀戰（沒有玩家）
 var terrain_type := 1
