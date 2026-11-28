@@ -165,7 +165,8 @@ var squad_spread := PackedFloat32Array() # 每步重算：隊員離中心最遠�
 var _sq_head := PackedInt32Array()      # 每步重算：小隊成員串列（活著的）
 var _sq_next := PackedInt32Array()
 var _player_att_n := 0                  # 每步重算：正在打玩家的士兵數
-var _ai_phase := [0, 0]                 # 電腦指揮官：0 待命、1 列隊推進中、2 已衝鋒
+var _ai_charge_t := [0.0, 0.0]          # 電腦指揮官下令衝鋒的時間
+var _ai_phase := [0, 0]                 # 電腦指揮官：0 待命、1 列隊推進中、2 步騎已衝鋒、3 全軍衝鋒
 
 # 武器配置表展開成陣列（每步迴圈裡查表比查 Dictionary 快）
 var _l_reach := PackedFloat32Array()
@@ -485,6 +486,7 @@ func _clear() -> void:
 	squad_center = PackedVector3Array()
 	squad_spread = PackedFloat32Array()
 	_ai_phase = [0, 0]
+	_ai_charge_t = [0.0, 0.0]
 	stat_start = PackedInt32Array(); stat_start.resize(8)
 	stat_dead = PackedInt32Array(); stat_dead.resize(8)
 	stat_kill_src = PackedInt32Array(); stat_kill_src.resize(8)
@@ -958,6 +960,12 @@ func _army_tick(delta: float) -> void:
 	#   一般：開戰 2 秒後全軍列隊推進到離敵軍約 34 公尺，敵人逼近、推進完成或 60 秒後，步兵與騎兵衝鋒（弓兵原地放箭）
 	#   立即衝鋒：開戰就全軍衝；守位：原地等，敵人逼近才衝
 	for t in 2:
+		if ai_team[t] and _ai_phase[t] == 2:
+			# 已衝鋒：步兵騎兵打光了，或衝鋒 45 秒後，弓兵也壓上去（避免最後剩弓兵遠遠對射拖很久）
+			if _select(t, MASK_INF | MASK_CAV).is_empty() or battle_time > _ai_charge_t[t] + 45.0:
+				_ai_phase[t] = 3
+				issue_order(t, Order.CHARGE, Vector3.ZERO, Vector3.ZERO, MASK_ARC)
+			continue
 		if not ai_team[t] or _ai_phase[t] >= 2:
 			continue
 		var mode: int = ai_mode[t]
@@ -994,7 +1002,8 @@ func _army_tick(delta: float) -> void:
 
 
 func _ai_charge(t: int, mask: int) -> void:
-	_ai_phase[t] = 2
+	_ai_phase[t] = 2 if mask != MASK_ALL else 3
+	_ai_charge_t[t] = battle_time
 	_ai_charged[t] = true
 	_enemy_charged = true
 	issue_order(t, Order.CHARGE, Vector3.ZERO, Vector3.ZERO, mask)
@@ -1022,9 +1031,18 @@ func _enemy_near_squads(t: int, r: float) -> bool:
 		var a := squad_anchor[s]
 		if player != null and player.team != t and not player.dead and a.distance_squared_to(player.global_position) < r2:
 			return true
-		for j in count:
-			if team[j] != t and state[j] != State.DEAD and a.distance_squared_to(pos[j]) < r2:
-				return true
+		# 先用敵方小隊中心＋散開半徑粗篩，再看隊員
+		for e in squad_count:
+			if squad_team[e] == t or squad_alive[e] <= 0:
+				continue
+			var re := r + squad_spread[e]
+			if Vector2(squad_center[e].x - a.x, squad_center[e].z - a.z).length_squared() > re * re:
+				continue
+			var j := _sq_head[e]
+			while j != -1:
+				if a.distance_squared_to(pos[j]) < r2:
+					return true
+				j = _sq_next[j]
 	return false
 
 
