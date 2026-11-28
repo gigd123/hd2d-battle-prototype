@@ -8,6 +8,9 @@ var _info: Label
 var _help: Label
 var _toast: Label
 var _crosshair: Label                 # 弓箭瞄準時的準心（拉滿變紅）
+var _hitmark: Label                   # 箭射中時準心外圍閃一下的 ✕（擊殺是紅色、比較大）
+var _hittext: Label                   # 準心下方的「命中 32」「擊殺！」
+var _hit_t := 0.0
 var _toast_time := 0.0
 
 
@@ -38,6 +41,31 @@ func _ready() -> void:
 	_crosshair.offset_bottom = 18
 	_crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hitmark = _make_label(Vector2.ZERO, 44)
+	_hitmark.text = "✕"
+	for l in [_hitmark]:
+		l.anchor_left = 0.5
+		l.anchor_right = 0.5
+		l.anchor_top = 0.5
+		l.anchor_bottom = 0.5
+		l.offset_left = -40
+		l.offset_right = 40
+		l.offset_top = -32
+		l.offset_bottom = 32
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		l.visible = false
+	_hittext = _make_label(Vector2.ZERO, 20)
+	_hittext.anchor_left = 0.5
+	_hittext.anchor_right = 0.5
+	_hittext.anchor_top = 0.5
+	_hittext.anchor_bottom = 0.5
+	_hittext.offset_left = -120
+	_hittext.offset_right = 120
+	_hittext.offset_top = 30
+	_hittext.offset_bottom = 60
+	_hittext.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hittext.visible = false
 	_toast = _make_label(Vector2(0, 120), 22)
 	_toast.anchor_left = 0.5
 	_toast.anchor_right = 0.5
@@ -56,6 +84,15 @@ func _make_label(pos: Vector2, font_size: int) -> Label:
 	return l
 
 
+## 玩家的箭射中：準心閃 ✕，下方顯示傷害或擊殺
+func on_arrow_hit(_point: Vector3, damage: float, killed: bool) -> void:
+	_hit_t = 0.6 if killed else 0.4
+	_hitmark.modulate = Color(1.0, 0.25, 0.2) if killed else Color(1, 1, 1)
+	_hitmark.add_theme_font_size_override("font_size", 56 if killed else 40)
+	_hittext.text = ("擊殺！ %d" if killed else "命中 %d") % int(damage)
+	_hittext.modulate = Color(1.0, 0.35, 0.3) if killed else Color(1.0, 0.95, 0.6)
+
+
 func toast(text: String, seconds := 1.5) -> void:
 	_toast.text = text
 	_toast_time = seconds
@@ -64,7 +101,14 @@ func toast(text: String, seconds := 1.5) -> void:
 func _process(delta: float) -> void:
 	_toast_time -= delta
 	_toast.visible = _toast_time > 0.0
-	_crosshair.visible = player != null and player.is_aiming()
+	_hit_t = maxf(_hit_t - delta / maxf(Engine.time_scale, 0.001), 0.0)
+	_hitmark.visible = _hit_t > 0.0
+	_hittext.visible = _hit_t > 0.0
+	if _hit_t > 0.0:
+		var a := clampf(_hit_t / 0.25, 0.0, 1.0)
+		_hitmark.modulate.a = a
+		_hittext.modulate.a = a
+	_crosshair.visible = player != null and player.aim_view_active()
 	if _crosshair.visible:
 		var pw := player.draw_power()
 		_crosshair.modulate = Color(1.0, 1.0 - 0.7 * pw, 1.0 - 0.7 * pw)

@@ -74,6 +74,12 @@ var blocking := false
 var draw_t := -1.0
 var aim_view := 1
 var _release_t := -1.0           # 放箭動作剩餘秒數
+var _aim_linger := 0.0           # 放箭後瞄準視角多停留的秒數（看得到箭飛出去、有沒有射中）
+## 按住攻擊鍵時停在揮擊前的預備姿勢，放開才揮出
+@export var hold_to_swing := true
+@export var aim_linger_time := 0.7
+var _force_swing := false        # 測試或程式觸發的揮擊：不等放開
+signal arrow_hit_confirmed(point: Vector3, damage: float, killed: bool)
 var hurt_t := 0.0                # >0：受擊硬直中
 var _knock := Vector3.ZERO       # 擊退速度（逐漸衰減）
 var _flash_t := 0.0              # 受擊閃紅剩餘秒數
@@ -147,6 +153,11 @@ func is_bow() -> bool:
 ## 正在用弓瞄準（相機與準心用）
 func is_aiming() -> bool:
 	return is_bow() and draw_t >= 0.0 and not dead
+
+
+## 相機與準心用：拉弓中，或剛放箭的短暫時間（讓玩家看到箭有沒有射中）
+func aim_view_active() -> bool:
+	return is_bow() and not dead and (draw_t >= 0.0 or _aim_linger > 0.0)
 
 
 func draw_power() -> float:
@@ -544,7 +555,11 @@ func _update_attack(delta: float) -> void:
 	attack_timer -= delta
 	match attack_phase:
 		AttackPhase.WINDUP:
-			if attack_timer <= 0.0:
+			# 按住攻擊鍵：蓄力做完後停在預備姿勢，放開才揮出（傷害不會因為按得久而變高）
+			if attack_timer <= 0.0 and hold_to_swing and Input.is_action_pressed("attack") and not _force_swing:
+				attack_timer = 0.0
+			elif attack_timer <= 0.0:
+				_force_swing = false
 				attack_phase = AttackPhase.SWING
 				attack_timer = _st()
 				_swing_t = 0.0
@@ -682,6 +697,7 @@ func _update_bow(delta: float) -> void:
 	if draw_t >= float(wdef["min_draw"]):
 		_fire_arrow(draw_power())
 		_release_t = float(wdef["recover"])
+		_aim_linger = aim_linger_time
 	draw_t = -1.0
 
 
@@ -710,7 +726,7 @@ func _fire_arrow(power: float) -> void:
 
 ## 第一人稱瞄準中：自己（和馬上的騎士）不畫，免得擋住鏡頭
 func first_person() -> bool:
-	return is_aiming() and aim_view == 2
+	return aim_view_active() and aim_view == 2
 
 
 ## BattleManager 回報玩家的箭射中士兵
@@ -719,6 +735,7 @@ func on_arrow_hit(point: Vector3, dmg: float, killed: bool) -> void:
 		total_kills += 1
 	hit_detail.emit(point, dmg, killed, 0.0)
 	hit_landed.emit(1, dmg)
+	arrow_hit_confirmed.emit(point, dmg, killed)
 
 
 func _update_debug_sweeps(delta: float) -> void:
@@ -738,7 +755,8 @@ func _process(delta: float) -> void:
 	var tint := Color(1.0, 0.35, 0.3) if _flash_t > 0.0 else Color.WHITE
 	var show_foot := not is_seated()
 	if cam_rig:
-		cam_rig.aim_mode = aim_view if is_aiming() else 0
+		_aim_linger = maxf(_aim_linger - real_dt, 0.0)
+		cam_rig.aim_mode = aim_view if aim_view_active() else 0
 	visual.visible = show_foot and not first_person()
 	if horse and horse.visual:
 		horse.visual.set_attach_tint(tint)
