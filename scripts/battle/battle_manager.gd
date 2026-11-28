@@ -94,7 +94,7 @@ const NO_TARGET := -1
 @export var squad_think := 0.5
 @export var army_think := 1.5
 @export var corpse_time := 25.0
-@export var cell_size := 3.0
+@export var cell_size := 1.6
 @export var trample_speed := 5.0        # 騎馬超過此速度（m/s）撞到敵兵會造成衝撞傷害與擊飛
 @export var trample_cooldown := 0.8
 
@@ -102,6 +102,12 @@ const NO_TARGET := -1
 var count := 0
 var pos := PackedVector3Array()
 var prev_pos := PackedVector3Array()
+## 士兵模擬分攤（見 _physics_process）：總人數達到 SIM_DIV_FROM 就讓每個士兵每 2 個物理步更新一次（30Hz），兩半輪流
+const SIM_DIV_FROM := 300
+## 推擠：一個士兵最多同時被幾個重疊的鄰居推（擠成一團時不必每個都算，效果差不多）
+const MAX_CONTACTS := 8
+var sim_div := 1
+var _sim_phase := 0
 var vel := PackedVector3Array()
 var facing := PackedVector3Array()
 var team := PackedByteArray()
@@ -878,7 +884,13 @@ func _physics_process(delta: float) -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 	battle_time += delta
-	prev_pos = pos.duplicate()
+	# 士兵模擬分攤：人多時（≥ SIM_DIV_FROM）士兵分成兩半輪流更新，每個士兵每 2 個物理步更新一次（時間步長 ×2），
+	# 每一幀的工作量只有一半而且平均，不會一幀重一幀輕。畫面用 interp_fraction() 內插，看起來一樣平滑。
+	# 軍隊、小隊、箭矢、玩家與馬仍是每步更新。
+	# 攻城戰先不分組：雲梯排隊、梯頂卡位這些逐步判定對更新頻率很敏感，分組後攻守平衡會跑掉（雲端實測）
+	sim_div = 1 if (count < SIM_DIV_FROM or siege != null or GameConfig.no_sim_split) else 2
+	_sim_phase = (_sim_phase + 1) % sim_div
+	var sd := delta * sim_div
 
 	_rebuild_grid()
 	var t1 := Time.get_ticks_usec()
@@ -891,15 +903,15 @@ func _physics_process(delta: float) -> void:
 	_squad_tick(delta)
 	_recount_attackers()
 	think_calls = 0
-	for i in count:
+	for i in range(_sim_phase, count, sim_div):
 		if state[i] == State.DEAD:
 			continue
-		think_timer[i] -= delta
+		think_timer[i] -= sd
 		if think_timer[i] <= 0.0:
 			_think(i)
 	var t2 := Time.get_ticks_usec()
 
-	_move_and_fight(delta)
+	_move_and_fight(sd)
 	var t3 := Time.get_ticks_usec()
 	_update_arrows(delta)
 	var t4 := Time.get_ticks_usec()
@@ -1156,25 +1168,9 @@ func _think(i: int) -> void:
 func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 	var best := NO_TARGET
 	var best_d := radius * radius
-	# 半徑很大（弓兵射程、衝鋒）時，網格要掃的格子太多：改成先用小隊中心篩掉太遠的敵方小隊，只看附近小隊的隊員
-	if radius > 24.0:
-		for s in squad_count:
-			if squad_team[s] == my_team or squad_alive[s] <= 0:
-				continue
-			var reach_s := radius + squad_spread[s]
-			if Vector2(squad_center[s].x - p.x, squad_center[s].z - p.z).length_squared() > reach_s * reach_s:
-				continue
-			var j := _sq_head[s]
-			while j != -1:
-				if siege == null or _siege_can_target(i, j):
-					var dj := p.distance_squared_to(pos[j])
-					if attackers[j] >= max_attackers and target[i] != j and dj > 4.0:
-						dj *= 4.0
-					if dj < best_d:
-						best_d = dj
-						best = j
-				j = _sq_next[j]
-		return best
+	# 半徑稍大（守位接敵 16 m、弓兵射程、衝鋒）時，網格要掃的格子太多：改用小隊層級由近到遠找
+	if radius > 8.0:
+		return _nearest_by_squads(i, p, my_team, radius)
 	var r_cells := int(ceil(radius / cell_size))
 	var c0x := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
 	var c0z := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
@@ -1207,18 +1203,8 @@ func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 ## 附近沒有敵人時：找最近的敵方小隊（以中心距離扣掉隊伍散開範圍估計），再取該隊最近的人
 func _find_enemy_global(p: Vector3, my_team: int, i := -1) -> int:
 	if siege != null:
-		var best := NO_TARGET
-		var best_d := INF
-		for j in count:
-			if state[j] == State.DEAD or team[j] == my_team:
-				continue
-			if i >= 0 and not _siege_can_target(i, j):
-				continue
-			var d := p.distance_squared_to(pos[j])
-			if d < best_d:
-				best_d = d
-				best = j
-		return best
+		# 攻城戰：有些敵人打不到（隔著城牆、不同層），不能只看最近的小隊
+		return _nearest_by_squads(i, p, my_team, INF)
 	var best_s := -1
 	var best_sd := INF
 	for s in squad_count:
@@ -1231,6 +1217,42 @@ func _find_enemy_global(p: Vector3, my_team: int, i := -1) -> int:
 	if best_s < 0:
 		return NO_TARGET
 	return _nearest_in_squad(p, best_s)
+
+
+## 依「敵方小隊中心距離－散開半徑」由近到遠檢查各隊隊員，下一隊的最近可能距離已經比目前找到的遠就停止。
+## 攻擊槽位已滿的目標距離 ×4（降低優先度，除非就在身邊）；攻城戰另外過濾打不到的目標。
+## 一般只要看 1～3 隊就結束，不必掃全部士兵。
+func _nearest_by_squads(i: int, p: Vector3, my_team: int, max_d: float) -> int:
+	var lb := PackedFloat32Array()
+	lb.resize(squad_count)
+	for s in squad_count:
+		if squad_team[s] == my_team or squad_alive[s] <= 0:
+			lb[s] = INF
+		else:
+			lb[s] = maxf(Vector2(squad_center[s].x - p.x, squad_center[s].z - p.z).length() - squad_spread[s], 0.0)
+	var best := NO_TARGET
+	var best_d := max_d * max_d if max_d < INF else INF
+	var cur := target[i] if i >= 0 else NO_TARGET
+	while true:
+		var ns := -1
+		var nd := INF
+		for s in squad_count:
+			if lb[s] < nd:
+				nd = lb[s]
+				ns = s
+		if ns < 0 or nd * nd > best_d:
+			break
+		lb[ns] = INF
+		var j := _sq_head[ns]
+		while j != -1:
+			var d := p.distance_squared_to(pos[j])
+			if attackers[j] >= max_attackers and cur != j and d > 4.0:
+				d *= 4.0
+			if d < best_d and (siege == null or i < 0 or _siege_can_target(i, j)):
+				best_d = d
+				best = j
+			j = _sq_next[j]
+	return best
 
 
 func _nearest_in_squad(p: Vector3, s: int) -> int:
@@ -1274,7 +1296,8 @@ func _move_and_fight(delta: float) -> void:
 		pl_fwd = mv / pl_speed if pl_speed > 0.1 else player.facing
 		pl_radius = 1.3 if player.mounted else 0.5
 
-	for i in count:
+	for i in range(_sim_phase, count, sim_div):
+		prev_pos[i] = pos[i]
 		if state[i] == State.DEAD:
 			if hit_flash[i] > 0.0:
 				hit_flash[i] -= delta
@@ -1407,10 +1430,15 @@ func _move_and_fight(delta: float) -> void:
 		var ddz := desired.z / ddl if ddl > 0.1 else 0.0
 		var cx := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
 		var cz := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
+		var contacts := 0
 		for gz in range(maxi(cz - 1, 0), mini(cz + 2, _grid_w)):
+			if contacts >= MAX_CONTACTS:
+				break
 			for gx in range(maxi(cx - 1, 0), mini(cx + 2, _grid_w)):
+				if contacts >= MAX_CONTACTS:
+					break
 				var j := _cell_head[gz * _grid_w + gx]
-				while j != -1:
+				while j != -1 and contacts < MAX_CONTACTS:
 					if j != i and (siege == null or absf(pos[j].y - p.y) < 1.3):
 						var dx := p.x - pos[j].x
 						var dz := p.z - pos[j].z
@@ -1421,6 +1449,7 @@ func _move_and_fight(delta: float) -> void:
 								block = maxf(block, 1.0 - sqrt(d2) / 1.6)
 						var sd := my_r + rad[j] + 0.1
 						if d2 < sd * sd and d2 > 0.000001:
+							contacts += 1
 							var dd := sqrt(d2)
 							var k := (sd - dd) / dd
 							push.x += dx * k
@@ -1820,7 +1849,7 @@ func sweep_query(a0: Vector3, b0: Vector3, a1: Vector3, b1: Vector3, radius: flo
 	var c_lo_z := clampi(int((lo.z - margin - _grid_origin) / cell_size), 0, _grid_w - 1)
 	var c_hi_x := clampi(int((hi.x + margin - _grid_origin) / cell_size), 0, _grid_w - 1)
 	var c_hi_z := clampi(int((hi.z + margin - _grid_origin) / cell_size), 0, _grid_w - 1)
-	var heights := [0.5, 1.1, 1.6, 2.1]
+	var heights := [0.3, 0.7, 1.1, 1.5, 1.9, 2.3]
 	for cz in range(c_lo_z, c_hi_z + 1):
 		for cx in range(c_lo_x, c_hi_x + 1):
 			var j := _cell_head[cz * _grid_w + cx]
@@ -1836,6 +1865,28 @@ func sweep_query(a0: Vector3, b0: Vector3, a1: Vector3, b1: Vector3, radius: flo
 							break
 				j = _cell_next[j]
 	return out
+
+
+## 玩家馬上出手輔助：p 前方（與 fwd 夾角的 cos ≥ min_cos）半徑 r 內最近的敵兵，沒有回傳 -1
+func nearest_enemy_in_cone(p: Vector3, fwd: Vector3, r: float, min_cos: float, my_team: int) -> int:
+	var best := -1
+	var best_d := r * r
+	var rc := int(ceil(r / cell_size))
+	var c0x := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
+	var c0z := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
+	for cz in range(maxi(c0z - rc, 0), mini(c0z + rc + 1, _grid_w)):
+		for cx in range(maxi(c0x - rc, 0), mini(c0x + rc + 1, _grid_w)):
+			var j := _cell_head[cz * _grid_w + cx]
+			while j != -1:
+				if team[j] != my_team and state[j] != State.DEAD:
+					var dx := pos[j].x - p.x
+					var dz := pos[j].z - p.z
+					var d2 := dx * dx + dz * dz
+					if d2 < best_d and d2 > 0.0001 and (dx * fwd.x + dz * fwd.z) >= min_cos * sqrt(d2):
+						best_d = d2
+						best = j
+				j = _cell_next[j]
+	return best
 
 
 ## 給馬用：p 周圍半徑 r 內有幾個活著的士兵（雙方都算，人牆會擋馬）。
@@ -1971,11 +2022,19 @@ func append_debug_lines(pts: PackedVector3Array, cols: PackedColorArray) -> void
 		drawn += 1
 
 
+## 畫面內插比例：第 q 組士兵（編號 % sim_div == q）上一次更新（prev_pos）到這一次（pos）之間走到哪裡（0..1）
+func interp_fraction(q := 0) -> float:
+	if sim_div <= 1:
+		return Engine.get_physics_interpolation_fraction()
+	var since := posmod(_sim_phase - q, sim_div)
+	return clampf((float(since) + Engine.get_physics_interpolation_fraction()) / sim_div, 0.0, 1.0)
+
+
 func _process(_delta: float) -> void:
 	if renderer == null:
 		return
 	var t0 := Time.get_ticks_usec()
-	renderer.render(self, get_viewport().get_camera_3d(), Engine.get_physics_interpolation_fraction())
+	renderer.render(self, get_viewport().get_camera_3d(), interp_fraction())
 	t_render = Time.get_ticks_usec() - t0
 
 
@@ -2349,11 +2408,19 @@ func _ladder_ahead_limit(i: int) -> float:
 func _ladder_top_blocked(i: int, p: Vector3) -> bool:
 	var top := siege.wall_top()
 	var ex := SiegeMap.WALK_X0 + 0.4
-	for j in count:
-		if team[j] != team[i] and state[j] != State.DEAD and lvl[j] == 1:
-			var dx := pos[j].x - ex
-			var dz := pos[j].z - p.z
-			if dx * dx + dz * dz < 1.3 * 1.3 and absf(pos[j].y - top) < 0.5:
-				return true
+	# 只看梯頂附近的網格（以前是掃全部士兵）
+	var rc := int(ceil(1.3 / cell_size))
+	var c0x := clampi(int((ex - _grid_origin) / cell_size), 0, _grid_w - 1)
+	var c0z := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
+	for cz in range(maxi(c0z - rc, 0), mini(c0z + rc + 1, _grid_w)):
+		for cx in range(maxi(c0x - rc, 0), mini(c0x + rc + 1, _grid_w)):
+			var j := _cell_head[cz * _grid_w + cx]
+			while j != -1:
+				if team[j] != team[i] and state[j] != State.DEAD and lvl[j] == 1:
+					var dx := pos[j].x - ex
+					var dz := pos[j].z - p.z
+					if dx * dx + dz * dz < 1.3 * 1.3 and absf(pos[j].y - top) < 0.5:
+						return true
+				j = _cell_next[j]
 	return false
 

@@ -171,6 +171,13 @@ func setup(scenario: String) -> void:
 				[15.0, "tap", "select_cav"], [15.1, "tap", "order_charge"], [20.0, "cmd", ""], [20.1, "shot", "o03_attack"],
 				[20.5, "report", ""], [20.6, "quit", ""],
 			]
+		"ride_hits":
+			# 騎馬揮砍命中率：上馬全速衝向敵人、從目標右側（或左側）擦身而過，按住攻擊、接近時放開
+			# 結束時印出「揮出幾次、命中幾次」。武器用 --ride-weapon=編號（預設 0 單手劍）
+			steps = [
+				[0.1, "charge_team", "1"], [0.3, "tap", "interact"], [1.6, "aimbot", "ridepass"],
+				[1.6, "hold", "move_forward"], [60.0, "ridereport", ""], [60.1, "quit", ""],
+			]
 		"spectate":
 			# 觀戰鏡頭：切換、截圖、切回
 			steps = [
@@ -201,10 +208,26 @@ var _aim_target := -1
 var _aim_mode := ""
 var _auto_atk := true
 var _hits := 0
+var _swings := 0
+var _pass_side := 1.0
+var _release_lead := 0.2              # 放開時機：距離 < 攻擊距離＋馬速 × 這個秒數（--ride-lead=）
+var _pass_n := 0
+
+
+var _swing_landed := false
+var _swing_hits := 0
+
+
+func _on_swing(_m) -> void:
+	_swings += 1
+	_swing_landed = false
 
 
 func _on_hit(_n, _dmg) -> void:
 	_hits += 1
+	if not _swing_landed:
+		_swing_landed = true
+		_swing_hits += 1
 
 
 func _field_seg(t0: float, terrain: String, weapon_idx: int, caption: String, style: String) -> void:
@@ -295,6 +318,27 @@ func _update_aimbot() -> void:
 	if _aim_target < 0:
 		if _aim_mode == "melee":
 			Input.action_release("move_forward")
+		return
+	if _aim_mode == "ridepass":
+		# 瞄準目標側邊 1.3 公尺處擦身而過；按住攻擊，距離小於「攻擊距離＋0.25 秒馬跑的距離」就放開
+		var tq := bm.pos[_aim_target] - pp
+		tq.y = 0.0
+		var dq := tq.length()
+		var side_v := Vector3(-tq.z, 0, tq.x).normalized() * 1.3 * _pass_side
+		var aimp := tq + side_v
+		rig.yaw = lerp_angle(rig.yaw, atan2(-aimp.x, -aimp.z), 0.2)
+		var hspd: float = pl.horse.speed if pl.horse else 0.0
+		if pl.attack_phase == 0 and not Input.is_action_pressed("attack"):
+			Input.action_press("attack")
+			var ev := InputEventAction.new()
+			ev.action = "attack"
+			ev.pressed = true
+			Input.parse_input_event(ev)
+		elif Input.is_action_pressed("attack") and pl.attack_phase == 1 and dq < pl.reach() + hspd * _release_lead:
+			Input.action_release("attack")
+			_pass_n += 1
+			_pass_side = -_pass_side if _pass_n % 2 == 0 else _pass_side
+			_aim_target = -1
 		return
 	if not bow:
 		var tf := bm.pos[_aim_target] - pp
@@ -484,6 +528,18 @@ func _run(step: Array) -> void:
 			var apl: PlayerController = get_tree().current_scene.get("player")
 			if arg != "off" and not apl.hit_landed.is_connected(_on_hit):
 				apl.hit_landed.connect(_on_hit)
+				apl.swing_started.connect(_on_swing)
+			if arg == "ridepass":
+				for a in OS.get_cmdline_user_args():
+					if a.begins_with("--ride-lead="):
+						_release_lead = float(a.get_slice("=", 1))
+					if a.begins_with("--ride-weapon="):
+						apl.weapon_set.clear()
+						apl.weapon = int(a.get_slice("=", 1))
+						apl.wdef = WeaponDefs.get_def(apl.weapon)
+		"ridereport":
+			print("[ride_hits] 武器 %s　揮出 %d 次　有砍到人 %d 次（%.0f%%）" % [
+				get_tree().current_scene.get("player").call("weapon_name"), _swings, _swing_hits, 100.0 * _swing_hits / maxf(_swings, 1)])
 		"autoatk":
 			_auto_atk = arg == "on"
 		"nofollowcam":

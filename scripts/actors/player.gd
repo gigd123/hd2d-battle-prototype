@@ -24,6 +24,14 @@ enum AttackPhase { NONE, WINDUP, SWING, RECOVER }
 @export var mount_range := 3.0
 @export var mount_duration := 0.35
 @export var blade_radius := 0.15
+@export var blade_radius_mounted := 0.3   # 馬上揮砍的判定粗一點（高速下容錯）
+## 馬上攻擊的調整：攻擊距離加長、揮砍時間拉長一點，讓全速擦身而過時有足夠的出手時機
+const MOUNTED_REACH_BONUS := 0.3
+const MOUNTED_SWING_MULT := 1.3
+## 馬上攻擊時自動選邊與瞄準：在正前方這個角度內找最近的敵人
+const MOUNTED_ASSIST_DEG := 100.0
+const MOUNTED_THRUST_ASSIST_DEG := 35.0
+var _thrust_dir := Vector3.ZERO           # 馬上刺擊：鎖定的水平方向（沒有目標時為零 → 用正前方）
 @export var block_speed_scale := 0.5
 # 步伐（每跑一個動畫循環前進的距離，越大步伐越大）
 @export var walk_stride := 1.9
@@ -211,7 +219,7 @@ func draw_power() -> float:
 
 
 func reach() -> float:
-	return float(wdef["reach_mounted"] if mounted else wdef["reach_foot"])
+	return float(wdef["reach_mounted"]) + MOUNTED_REACH_BONUS if mounted else float(wdef["reach_foot"])
 
 
 ## 揮擊進度 0..1（含蓄力與收招），給預渲染動畫選幀：蓄力 = 前 1/3，揮出 = 中段，收招 = 最後 1/6
@@ -259,7 +267,7 @@ func _wt() -> float:
 
 
 func _st() -> float:
-	return wdef["swing"]
+	return float(wdef["swing"]) * (MOUNTED_SWING_MULT if mounted else 1.0)
 
 
 func _rt() -> float:
@@ -612,6 +620,10 @@ func _update_attack(delta: float) -> void:
 				attack_timer = _st()
 				_swing_t = 0.0
 				_swing_hit.clear()
+				if mounted:
+					_mounted_assist()
+				else:
+					_thrust_dir = Vector3.ZERO
 				swing_started.emit(mounted)
 				var g := _swing_geometry(0.0)
 				_swing_prev_base = g[0]
@@ -636,6 +648,36 @@ func _update_attack(delta: float) -> void:
 					_begin_attack()
 
 
+## 馬上出手那一刻：找正前方最近的敵人。揮砍 → 朝那一側揮（刀最後停在敵人那邊，擦身而過時一路跟著他）；
+## 刺擊 → 槍頭水平方向對準他。找不到就照原本的方式（交替方向、正前方）。
+func _mounted_assist() -> void:
+	_thrust_dir = Vector3.ZERO
+	if battle == null:
+		return
+	var thrust: bool = wdef["kind"] == "thrust"
+	var horse_spd := move_velocity().length()
+	var r := reach() + horse_spd * _st() + 1.5
+	var cone := cos(deg_to_rad(MOUNTED_THRUST_ASSIST_DEG if thrust else MOUNTED_ASSIST_DEG))
+	var j: int = battle.call("nearest_enemy_in_cone", global_position, facing, r, cone, team)
+	if j < 0:
+		return
+	var to: Vector3 = battle.call("soldier_position", j) - global_position
+	to.y = 0.0
+	if thrust:
+		_thrust_dir = to.normalized()
+	else:
+		var right := Vector3(-facing.z, 0, facing.x)
+		_swing_dir = -1.0 if to.dot(right) > 0.0 else 1.0      # 敵人在右邊 → 由左往右揮
+
+
+## 刀尖跟著地形起伏：刀尖下方的地面比自己腳下高（低）多少，刀尖就跟著抬高（壓低），
+## 斜坡上砍高處或低處的敵人才不會從頭上揮空或砍進地裡。攻城戰有城牆層，不調整。
+func _ground_comp(at: Vector3, tip: Vector3) -> float:
+	if terrain == null or (battle != null and battle.get("siege") != null):
+		return 0.0
+	return clampf(terrain.get_height(tip.x, tip.z) - terrain.get_height(at.x, at.z), -1.2, 1.2)
+
+
 ## t: 0..1 揮擊進度。回傳 [刀柄位置, 刀尖位置]（世界座標）。
 ## 由右後上方往左前下方橫掃；騎馬時從較高處往下砍到步兵胸口高度。
 func _swing_geometry(t: float, origin = null) -> Array:
@@ -646,9 +688,13 @@ func _swing_geometry(t: float, origin = null) -> Array:
 	if wdef["kind"] == "thrust":
 		# 刺擊：槍從肩膀往正前方（略往下）直直推出去，前段收在身邊、刺到底時達最大距離
 		var sb := at + Vector3(0, shoulder_h - 0.1, 0) + right * 0.2
-		var sdir := (f + Vector3(0, -0.35 if mounted else -0.12, 0)).normalized()
+		var hf := f
+		if mounted and _thrust_dir != Vector3.ZERO:
+			hf = _thrust_dir
+		var sdir := (hf + Vector3(0, -0.35 if mounted else -0.12, 0)).normalized()
 		var se := t * t * (3.0 - 2.0 * t)
 		var stip := sb + sdir * reach() * lerpf(0.35, 1.0, se)
+		stip.y += _ground_comp(at, stip)
 		return [stip - sdir * 1.0, stip]
 	var reach := reach()
 	var base := at + Vector3(0, shoulder_h, 0) + right * 0.25 * _swing_dir
@@ -656,8 +702,13 @@ func _swing_geometry(t: float, origin = null) -> Array:
 	var e := t * t * (3.0 - 2.0 * t)
 	var half := deg_to_rad(float(wdef["arc_deg"]) * 0.5)     # 掃過的角度由武器決定（單手劍窄、大劍寬）
 	var ang := lerpf(half, -half, e) * _swing_dir
-	var drop := lerpf(0.2, -1.0 if mounted else -0.5, e)
+	var drop := lerpf(0.2, -0.5, e)
+	if mounted:
+		# 馬上：從前方偏另一側 25° 掃到敵人那一側（至少 85°），刀尖從步兵頭部高度往下砍到腰部
+		ang = lerpf(deg_to_rad(25.0), -maxf(half, deg_to_rad(85.0)), e) * _swing_dir
+		drop = lerpf(-0.4, -1.4, e)
 	var tip := base + (f * cos(ang) + right * sin(ang)) * reach + Vector3(0, drop, 0)
+	tip.y += _ground_comp(at, tip)
 	var hilt := base + (tip - base) * 0.25
 	return [hilt, tip]
 
@@ -669,7 +720,7 @@ func _sweep(prev_base: Vector3, prev_tip: Vector3, base: Vector3, tip: Vector3) 
 	var max_t: int = wdef["max_targets"]
 	if _swing_hit.size() >= max_t:
 		return                         # 這一刀已經砍滿人數，後面掃到的都不算
-	var hits: PackedInt32Array = battle.call("sweep_query", prev_base, prev_tip, base, tip, blade_radius, team, _swing_hit)
+	var hits: PackedInt32Array = battle.call("sweep_query", prev_base, prev_tip, base, tip, blade_radius_mounted if mounted else blade_radius, team, _swing_hit)
 	if hits.is_empty():
 		return
 	# 同一步掃到多人時，近的先算
