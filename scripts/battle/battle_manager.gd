@@ -18,6 +18,7 @@ signal trampled(point: Vector3, speed: float, killed: bool)   # 玩家騎馬撞�
 signal arrow_fired(point: Vector3)
 signal arrow_hit(point: Vector3, on_unit: bool)
 signal cavalry_impact(point: Vector3, speed: float)            # 騎兵衝撞敵兵
+signal siege_event(text: String)                               # 攻城戰的戰況提示（城門被攻破等）
 
 enum State { IDLE, MOVE, ENGAGE, DEAD }
 enum Order { HOLD, FOLLOW, CHARGE }
@@ -60,6 +61,9 @@ const CAV_TURN_SLOW := 3.2
 const CAV_TURN_FAST := 1.6
 ## 騎兵被分離力推動的比例（馬比步兵重，比較不會被人群推著橫移）
 const CAV_PUSH_SCALE := 0.35
+
+## 攻城戰的小隊任務
+enum Role { NORMAL, RAM, RESERVE, WALLGUARD, GATE }
 
 const TARGET_PLAYER := -2
 const NO_TARGET := -1
@@ -109,6 +113,7 @@ var rad := PackedFloat32Array()         # 碰撞半徑（依兵種）
 var engage_t := PackedFloat32Array()    # 騎兵：已纏鬥秒數
 var disengage_t := PackedFloat32Array() # 騎兵：>0 時正在脫離（往前跑開）
 var push_s := PackedVector3Array()      # 平滑後的推擠速度（避免人群裡每步來回抖動）
+var lvl := PackedByteArray()            # 攻城戰：所在層（0 地面、1 牆頂／坡道、2 雲梯上）；野戰永遠 0
 
 # --- 箭矢（固定容量環狀緩衝）---
 var arrow_pos := PackedVector3Array()
@@ -134,6 +139,9 @@ var squad_facing := PackedVector3Array()
 var squad_timer := PackedFloat32Array()
 var squad_alive := PackedInt32Array()
 var squad_type := PackedByteArray()
+var squad_zone := PackedByteArray()     # 攻城戰：小隊集結點所在區域（SiegeMap.Zone）
+var squad_role := PackedByteArray()     # 攻城戰：小隊任務（Role）
+var squad_ladder := PackedInt32Array()  # 攻城戰：攻方小隊指定的雲梯（-1 = 自己挑）
 
 # --- 軍隊 ---
 var alive_count := PackedInt32Array([0, 0])
@@ -152,6 +160,16 @@ var terrain: BattleTerrain
 var player: PlayerController            # 可為 null（壓力測試）
 var renderer: SoldierRenderer
 var rng := RandomNumberGenerator.new()
+
+# --- 攻城戰（siege == null 時是一般野戰，以下都不作用）---
+var siege: SiegeMap = null
+var siege_attacker := 1                 # 攻方陣營；守方 = 1 - siege_attacker
+var siege_start_delay := 6.0            # 開局幾秒後攻方開始進攻
+var siege_time_limit := 600.0           # 時間到攻方還沒打下來 → 守方勝
+var siege_started := false
+var sortie := false                     # 守方出城追擊（攻方快死光時）
+var _gate_event_done := false
+var _siege_start_counts := PackedInt32Array([0, 0])
 
 # --- 空間網格（每步重建的串列頭/next 表）---
 var _grid_w := 0
@@ -293,6 +311,10 @@ func _clear() -> void:
 	engage_t = PackedFloat32Array()
 	disengage_t = PackedFloat32Array()
 	push_s = PackedVector3Array()
+	lvl = PackedByteArray()
+	squad_zone = PackedByteArray()
+	squad_role = PackedByteArray()
+	squad_ladder = PackedInt32Array()
 	squad_type = PackedByteArray()
 	squad_team = PackedByteArray()
 	squad_order = PackedByteArray()
@@ -307,6 +329,9 @@ func _clear() -> void:
 	winner = -1
 	_enemy_charged = false
 	_army_timer = 0.0
+	siege_started = false
+	sortie = false
+	_gate_event_done = false
 
 
 func _add_squad(t: int, anchor: Vector3, fwd: Vector3, ut: int = UnitType.INFANTRY) -> int:
@@ -317,13 +342,18 @@ func _add_squad(t: int, anchor: Vector3, fwd: Vector3, ut: int = UnitType.INFANT
 	squad_facing.append(fwd)
 	squad_timer.append(rng.randf() * squad_think)
 	squad_alive.append(0)
+	squad_zone.append(0)
+	squad_role.append(Role.NORMAL)
+	squad_ladder.append(-1)
 	squad_count += 1
 	return squad_count - 1
 
 
 func _add_soldier(t: int, sq: int, k: int) -> void:
 	var p := slot_position(sq, k)
-	p.y = terrain.get_height(p.x, p.z)
+	var lv := 1 if (siege != null and squad_zone[sq] == SiegeMap.Zone.WALL) else 0
+	lvl.append(lv)
+	p.y = _floor_y(lv, p)
 	pos.append(p)
 	prev_pos.append(p)
 	vel.append(Vector3.ZERO)
@@ -356,6 +386,8 @@ func _add_soldier(t: int, sq: int, k: int) -> void:
 
 ## 小隊隊形槽位：5 人一列，列距 1.4 公尺。
 func slot_position(sq: int, k: int) -> Vector3:
+	if siege != null and squad_role[sq] == Role.RAM and not siege.gate_broken:
+		return siege.ram_slot(k + maxi(squad_ladder[sq], 0))
 	var f := squad_facing[sq]
 	var right := Vector3(-f.z, 0, f.x)
 	var file := k % 5
@@ -394,7 +426,11 @@ func _physics_process(delta: float) -> void:
 	_rebuild_grid()
 	var t1 := Time.get_ticks_usec()
 
-	_army_tick(delta)
+	if siege != null:
+		_siege_army_tick(delta)
+		_siege_step(delta)
+	else:
+		_army_tick(delta)
 	_squad_tick(delta)
 	_recount_attackers()
 	think_calls = 0
@@ -471,6 +507,8 @@ func _squad_tick(delta: float) -> void:
 			if int(cmd["team"]) != squad_team[s]:
 				continue
 			squad_order[s] = int(cmd["order"])
+			if siege != null and squad_role[s] == Role.RAM and squad_order[s] != Order.CHARGE:
+				squad_role[s] = Role.NORMAL
 			if squad_order[s] == Order.HOLD:
 				# 在指定點集結：各小隊在該點附近排成橫列
 				var fwd: Vector3 = cmd["fwd"]
@@ -478,10 +516,18 @@ func _squad_tick(delta: float) -> void:
 					fwd = squad_facing[s]
 				squad_facing[s] = fwd
 				squad_anchor[s] = _rally_point(s, cmd["pos"], fwd)
+				if siege != null:
+					squad_zone[s] = _point_zone(cmd["pos"])
+					if squad_zone[s] == SiegeMap.Zone.WALL:
+						squad_anchor[s] = _wall_rally(s, cmd["pos"])
 		if squad_order[s] == Order.FOLLOW and player != null:
 			var pf := player.facing
 			squad_facing[s] = pf
 			squad_anchor[s] = _rally_point(s, player.global_position - pf * 8.0, pf)
+			if siege != null:
+				squad_zone[s] = _point_zone(player.global_position)
+				if squad_zone[s] == SiegeMap.Zone.WALL:
+					squad_anchor[s] = _wall_rally(s, player.global_position)
 
 
 ## 第 s 個小隊在集結點附近的位置（同陣營小隊依序橫向排開）。
@@ -523,6 +569,8 @@ func _think(i: int) -> void:
 		tg = NO_TARGET
 	if tg == TARGET_PLAYER and (player == null or not player.is_targetable()):
 		tg = NO_TARGET
+	if siege != null and tg >= 0 and not _siege_can_target(i, tg):
+		tg = NO_TARGET
 
 	var radius := search_radius if order == Order.CHARGE else engage_radius
 	if utype[i] == UnitType.ARCHER:
@@ -531,14 +579,14 @@ func _think(i: int) -> void:
 	if best != NO_TARGET:
 		tg = best
 	elif tg == NO_TARGET and order == Order.CHARGE:
-		tg = _find_enemy_global(p, my_team)
+		tg = _find_enemy_global(p, my_team, i)
 	# 敵方士兵也會把玩家當目標
 	if my_team == 1 and player != null and player.is_targetable():
 		var pd := p.distance_to(player.global_position)
 		var cur_d := 1e9
 		if tg >= 0:
 			cur_d = p.distance_to(pos[tg])
-		if pd < radius and pd < cur_d and _player_attackers() < max_attackers_player:
+		if pd < radius and pd < cur_d and _player_attackers() < max_attackers_player and (siege == null or _siege_can_target_player(i)):
 			tg = TARGET_PLAYER
 	if tg != target[i]:
 		if target[i] >= 0:
@@ -560,6 +608,8 @@ func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 	if radius > 24.0:
 		for j in count:
 			if state[j] == State.DEAD or team[j] == my_team:
+				continue
+			if siege != null and not _siege_can_target(i, j):
 				continue
 			var dj := p.distance_squared_to(pos[j])
 			if attackers[j] >= max_attackers and target[i] != j and dj > 4.0:
@@ -585,7 +635,7 @@ func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 					continue
 				var j := _cell_head[cz * _grid_w + cx]
 				while j != -1:
-					if team[j] != my_team:
+					if team[j] != my_team and (siege == null or _siege_can_target(i, j)):
 						var d := p.distance_squared_to(pos[j])
 						# 攻擊槽位已滿的目標降低優先度（除非就在身邊）
 						if attackers[j] >= max_attackers and target[i] != j and d > 4.0:
@@ -597,11 +647,13 @@ func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 	return best
 
 
-func _find_enemy_global(p: Vector3, my_team: int) -> int:
+func _find_enemy_global(p: Vector3, my_team: int, i := -1) -> int:
 	var best := NO_TARGET
 	var best_d := INF
 	for j in count:
 		if state[j] == State.DEAD or team[j] == my_team:
+			continue
+		if siege != null and i >= 0 and not _siege_can_target(i, j):
 			continue
 		var d := p.distance_squared_to(pos[j])
 		if d < best_d:
@@ -629,6 +681,8 @@ func _target_pos(tg: int) -> Vector3:
 # ---------------------------------------------------------------------------
 func _move_and_fight(delta: float) -> void:
 	var has_player := player != null and not player.dead
+	if siege != null:
+		_build_ladder_queue()
 	var pl_pos := Vector3.ZERO
 	var pl_fwd := Vector3.ZERO
 	var pl_speed := 0.0
@@ -649,7 +703,7 @@ func _move_and_fight(delta: float) -> void:
 			if dv.length_squared() > 0.01:
 				var dp := pos[i] + dv * delta
 				dp = terrain.clamp_to_map(dp, 4.0)
-				dp.y = terrain.get_height(dp.x, dp.z)
+				dp.y = _floor_y(lvl[i], dp)
 				pos[i] = dp
 				vel[i] = dv * maxf(0.0, 1.0 - 6.0 * delta)
 			continue
@@ -666,54 +720,85 @@ func _move_and_fight(delta: float) -> void:
 		var walk: float = U_WALK[ut]
 		var run: float = U_RUN[ut]
 		trample_cd[i] = maxf(trample_cd[i] - delta, 0.0)
+		var climb := 0                  # 攻城戰：這一步想往上爬（+1）或往下（-1）
+		var use_slot := tg == NO_TARGET
 		if stun[i] > 0.0:
 			stun[i] -= delta
+			use_slot = false
 		elif ut == UnitType.CAVALRY and disengage_t[i] > 0.0:
 			# 騎兵脫離：沿目前朝向全速跑開，之後重新找目標衝鋒
 			disengage_t[i] -= delta
 			desired = face * run
+			use_slot = false
 		elif tg != NO_TARGET:
 			var tp := _target_pos(tg)
-			var to := tp - p
-			to.y = 0.0
-			var d := to.length()
-			var reach: float = U_REACH[ut] + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
-			if d > 0.001:
-				face = to / d
-			if ut == UnitType.ARCHER and d > ARCHER_MIN_RANGE:
-				# 弓兵：射程內站定放箭，射程外前進
-				if d > archer_range(p.y - tp.y):
-					desired = face * run
-				elif atk_cooldown[i] <= 0.0:
-					atk_anim[i] = 0.6
-					atk_cooldown[i] = rng.randf_range(2.4, 3.2)
-					_fire_arrow(i, p, tg, d)
-			elif d > reach * 0.85:
-				desired = face * (run if (d > 6.0 or ut == UnitType.CAVALRY) else walk)
-			else:
-				if ut == UnitType.INFANTRY and d < SPEAR_MIN_DIST:
-					desired = -face * walk * 0.6
-				if ut == UnitType.CAVALRY:
-					engage_t[i] += delta
-					if engage_t[i] > CAV_MELEE_TIME:
-						engage_t[i] = 0.0
-						disengage_t[i] = CAV_DISENGAGE_TIME
-						face = (-face).rotated(Vector3.UP, rng.randf_range(-0.7, 0.7))
-				if atk_cooldown[i] <= 0.0 and atk_hit_at[i] <= 0.0:
-					# 出手：蓄力 0.25 秒後結算
-					atk_anim[i] = 0.45
-					atk_hit_at[i] = 0.25
-					atk_cooldown[i] = rng.randf_range(1.2, 1.8)
-		else:
-			var order := squad_order[squad[i]]
-			if order != Order.CHARGE:
-				var sp := slot_position(squad[i], slot[i])
-				var to := sp - p
+			var nav := false
+			if siege != null:
+				# 攻城戰：目標在別層（牆上／城外）就先走導航點（梯子、坡道、城門）
+				var mode := _siege_mode(i, tg, tp)
+				if mode == 2:
+					use_slot = true
+				elif mode == 1:
+					nav = true
+					tp = siege.waypoint(lvl[i], p, tp, _target_zone(tg), _ladder_pref(i))
+					climb = siege.last_climb if ut != UnitType.CAVALRY else 0
+			if not use_slot:
+				var to := tp - p
 				to.y = 0.0
 				var d := to.length()
-				if d > 0.4:
-					desired = to / d * (run_speed if d > 8.0 else walk_speed) * minf(1.0, d / 1.5)
+				var reach: float = U_REACH[ut] + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
+				if d > 0.001:
 					face = to / d
+				if nav:
+					desired = face * run
+				elif ut == UnitType.ARCHER and (d > ARCHER_MIN_RANGE or (siege != null and absf(tp.y - p.y) > 1.7)):
+					# 弓兵：射程內站定放箭，射程外前進
+					if d > archer_range(p.y - tp.y):
+						desired = face * run
+					elif atk_cooldown[i] <= 0.0:
+						atk_anim[i] = 0.6
+						atk_cooldown[i] = rng.randf_range(2.4, 3.2)
+						_fire_arrow(i, p, tg, d)
+				elif d > reach * 0.85:
+					desired = face * (run if (d > 6.0 or ut == UnitType.CAVALRY) else walk)
+				else:
+					if ut == UnitType.INFANTRY and d < SPEAR_MIN_DIST:
+						desired = -face * walk * 0.6
+					if ut == UnitType.CAVALRY:
+						engage_t[i] += delta
+						if engage_t[i] > CAV_MELEE_TIME:
+							engage_t[i] = 0.0
+							disengage_t[i] = CAV_DISENGAGE_TIME
+							face = (-face).rotated(Vector3.UP, rng.randf_range(-0.7, 0.7))
+					if atk_cooldown[i] <= 0.0 and atk_hit_at[i] <= 0.0:
+						# 出手：蓄力 0.25 秒後結算
+						atk_anim[i] = 0.45
+						atk_hit_at[i] = 0.25
+						atk_cooldown[i] = rng.randf_range(1.2, 1.8)
+		if use_slot:
+			var sq_i := squad[i]
+			var order := squad_order[sq_i]
+			var goal := Vector3.INF
+			var goal_zone := 0
+			if order != Order.CHARGE or (siege != null and squad_role[sq_i] == Role.RAM and not siege.gate_broken):
+				goal = slot_position(sq_i, slot[i])
+				if siege != null:
+					goal_zone = squad_zone[sq_i]
+			elif siege != null:
+				goal = _siege_objective(i)
+				goal_zone = _obj_zone
+			if goal != Vector3.INF:
+				var far := false
+				if siege != null and (lvl[i] == 2 or siege.zone_of(lvl[i], p.x) != goal_zone):
+					goal = siege.waypoint(lvl[i], p, goal, goal_zone, _ladder_pref(i))
+					climb = siege.last_climb if ut != UnitType.CAVALRY else 0
+					far = true
+				var to := goal - p
+				to.y = 0.0
+				var d := to.length()
+				if d > 0.4 or far:
+					desired = to / maxf(d, 0.001) * (run_speed if (d > 8.0 or far) else walk_speed) * (1.0 if far else minf(1.0, d / 1.5))
+					face = to / maxf(d, 0.001)
 				else:
 					face = squad_facing[squad[i]]
 
@@ -723,14 +808,15 @@ func _move_and_fight(delta: float) -> void:
 			if atk_hit_at[i] <= 0.0 and tg != NO_TARGET:
 				var tp2 := _target_pos(tg)
 				var reach2: float = U_REACH[ut] + 0.4 + (0.9 if tg == TARGET_PLAYER and player.mounted else 0.0)
-				if Vector2(tp2.x - p.x, tp2.z - p.z).length() <= reach2 and rng.randf() < 0.75:
+				if Vector2(tp2.x - p.x, tp2.z - p.z).length() <= reach2 and rng.randf() < 0.75 and (siege == null or absf(tp2.y - p.y) < 1.8):
 					var dmg := rng.randf_range(U_DMG_MIN[ut], U_DMG_MAX[ut])
 					if ut == UnitType.INFANTRY and Vector2(tp2.x - p.x, tp2.z - p.z).length() < SPEAR_MIN_DIST:
 						dmg *= 0.5
 					if tg == TARGET_PLAYER:
 						player.take_damage(dmg, p)
 					else:
-						apply_damage(tg, dmg, face * 0.15)
+						if apply_damage(tg, dmg, face * 0.15):
+							dbg_melee_kills[team[i]] += 1
 					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), true)
 				else:
 					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), false)
@@ -751,7 +837,7 @@ func _move_and_fight(delta: float) -> void:
 			for gx in range(maxi(cx - 1, 0), mini(cx + 2, _grid_w)):
 				var j := _cell_head[gz * _grid_w + gx]
 				while j != -1:
-					if j != i:
+					if j != i and (siege == null or absf(pos[j].y - p.y) < 1.3):
 						var dx := p.x - pos[j].x
 						var dz := p.z - pos[j].z
 						var d2 := dx * dx + dz * dz
@@ -786,7 +872,7 @@ func _move_and_fight(delta: float) -> void:
 				push.x += ox / od * (rr - od) * 2.0
 				push.z += oz / od * (rr - od) * 2.0
 		# 玩家與馬：重疊就推開；高速奔馳時前方的士兵會往側邊閃避
-		if has_player:
+		if has_player and (siege == null or absf(pl_pos.y - p.y) < 1.5):
 			var rx := p.x - pl_pos.x
 			var rz := p.z - pl_pos.z
 			var rd2 := rx * rx + rz * rz
@@ -815,7 +901,7 @@ func _move_and_fight(delta: float) -> void:
 
 		# 地形：上坡變慢、下坡稍快，涉水與積雪減速
 		var dl := Vector2(desired.x, desired.z).length()
-		if dl > 0.1:
+		if dl > 0.1 and lvl[i] == 0:
 			desired *= terrain.move_factor(p.x, p.z, desired.x / dl, desired.z / dl)
 		if ut == UnitType.CAVALRY:
 			# 馬不能橫著走：身體朝向以有限速度轉向目標方向，速度只沿身體朝向
@@ -852,10 +938,30 @@ func _move_and_fight(delta: float) -> void:
 			pv *= 4.0 / pl
 		var ps := push_s[i].lerp(pv, minf(1.0, 14.0 * delta))
 		push_s[i] = ps
+		if siege != null and lvl[i] == 2:
+			# 雲梯上：只能沿梯子上下，速度有上限
+			v.z = 0.0
+			v.x = clampf(v.x, -SiegeMap.LADDER_SPEED, SiegeMap.LADDER_SPEED)
+			ps = Vector3(clampf(ps.x, -1.5, 1.5), 0, 0)
 		p.x += (v.x + ps.x) * delta
 		p.z += (v.z + ps.z) * delta
-		p = terrain.clamp_to_map(p, 4.0)
-		p.y = terrain.get_height(p.x, p.z)
+		if siege != null:
+			if lvl[i] == 0 and climb > 0 and _ladder_foot_busy(p.z):
+				climb = 0              # 梯腳有人正在爬：排隊等
+			elif lvl[i] == 2:
+				p.x = minf(p.x, _ladder_ahead_limit(i))
+			p = siege.resolve(lvl[i], pos[i], p, my_r, climb)
+			if lvl[i] == 2 and siege.last_level == 1 and _ladder_top_blocked(i, p):
+				# 梯頂有敵人擋著：上不去，只能在梯頂跟他打
+				p = pos[i]
+				p.x = minf(p.x, SiegeMap.WALK_X0 - 0.15)
+			else:
+				lvl[i] = siege.last_level
+			p = terrain.clamp_to_map(p, 4.0)
+			p.y = _floor_y(lvl[i], p)
+		else:
+			p = terrain.clamp_to_map(p, 4.0)
+			p.y = terrain.get_height(p.x, p.z)
 		pos[i] = p
 		vel[i] = v
 		facing[i] = face
@@ -890,6 +996,7 @@ func _fire_arrow(i: int, p: Vector3, tg: int, d: float) -> void:
 	arrow_life[k] = 4.0
 	arrow_mult[k] = 1.0 + clampf((p.y - tp.y) * HIGH_GROUND_DMG_PER_M, -0.15, 0.35)
 	arrow_dmg[k] = 0.0
+	dbg_fired[team[i]] += 1
 	arrow_fired.emit(start)
 
 
@@ -944,7 +1051,14 @@ func _step_arrow(k: int, delta: float, g: Vector3, pl_ok: bool, pl_center: Vecto
 		arrow_pos[k] = Vector3(p.x, ground + 0.2, p.z)
 		arrow_hit.emit(arrow_pos[k], false)
 		return
-	if p.y - ground > 3.0:
+	if siege != null and siege.blocks_arrow(p, v.x):
+		# 插在城牆、女兒牆或城門上
+		dbg_wall_block[arrow_team[k]] += 1
+		arrow_state[k] = 2
+		arrow_life[k] = ARROW_STUCK_TIME
+		arrow_hit.emit(p, false)
+		return
+	if p.y - ground > (3.0 if siege == null else SiegeMap.WALL_H + 3.0):
 		return
 	var tm := arrow_team[k]
 	var hit := -1
@@ -973,7 +1087,12 @@ func _step_arrow(k: int, delta: float, g: Vector3, pl_ok: bool, pl_center: Vecto
 			if player:
 				player.on_arrow_hit(p, arrow_dmg[k], killed)
 		else:
-			apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX) * arrow_mult[k], flat * 0.25)
+			dbg_arrow_hits[tm] += 1
+			var cover := 1.0
+			if siege != null and lvl[hit] == 1 and pos[hit].x < SiegeMap.WALL_X1:
+				cover = SIEGE_WALL_ARROW_MULT
+			if apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX) * arrow_mult[k] * cover, flat * 0.25):
+				dbg_arrow_kills[tm] += 1
 		arrow_state[k] = 0
 		arrow_hit.emit(p, true)
 		return
@@ -1026,6 +1145,13 @@ func _kill(i: int) -> void:
 	alive_count[team[i]] -= 1
 	kills[1 - team[i]] += 1
 	squad_alive[squad[i]] -= 1
+	if siege != null and lvl[i] == 2:
+		# 從雲梯上被打下來：掉到梯腳
+		lvl[i] = 0
+		var q := pos[i]
+		q.x = minf(q.x, SiegeMap.WALL_X0 - 0.5)
+		q.y = terrain.get_height(q.x, q.z)
+		pos[i] = q
 
 
 ## 線段掃掠命中：前一步刀身 (a0→b0) 到這一步刀身 (a1→b1) 掃過的四邊形，
@@ -1069,7 +1195,7 @@ func count_blockers(p: Vector3, r: float) -> int:
 			while j != -1:
 				var dx := p.x - pos[j].x
 				var dz := p.z - pos[j].z
-				if dx * dx + dz * dz < r2:
+				if dx * dx + dz * dz < r2 and absf(pos[j].y - p.y) < 2.0:
 					n += 1
 				j = _cell_next[j]
 	return n
@@ -1119,12 +1245,18 @@ static func _closest_on_tri(p: Vector3, a: Vector3, b: Vector3, c: Vector3) -> V
 func _check_victory() -> void:
 	if winner != -1:
 		return
+	if siege != null and battle_time >= siege_time_limit and alive_count[0] > 0 and alive_count[1] > 0:
+		winner = 1 - siege_attacker
+		battle_finished.emit(winner)
+		return
 	if alive_count[0] <= 0 or alive_count[1] <= 0:
 		winner = 1 if alive_count[0] <= 0 else 0
 		battle_finished.emit(winner)
 
 
 func stats_text() -> String:
+	if siege != null:
+		return _siege_stats_text()
 	var s := "我軍 %d　敵軍 %d　擊殺 %d：%d　戰鬥 %.0f 秒" % [alive_count[0], alive_count[1], kills[0], kills[1], battle_time]
 	if squad_count > 0:
 		s += "　我軍命令：%s" % order_name(_first_order(0))
@@ -1171,3 +1303,376 @@ func _process(_delta: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	renderer.render(self, get_viewport().get_camera_3d(), Engine.get_physics_interpolation_fraction())
 	t_render = Time.get_ticks_usec() - t0
+
+
+# ---------------------------------------------------------------------------
+# 攻城戰
+# ---------------------------------------------------------------------------
+## 牆頂守軍有城垛掩護：受到的箭傷乘上這個倍率
+const SIEGE_WALL_ARROW_MULT := 0.6
+var _obj_zone := 0                      # _siege_objective() 的附帶結果：目標點所在區域
+
+
+func defender_team() -> int:
+	return 1 - siege_attacker
+
+
+func _floor_y(level: int, p: Vector3) -> float:
+	if siege != null:
+		return siege.floor_y(level, p)
+	return terrain.get_height(p.x, p.z)
+
+
+func _point_zone(p: Vector3) -> int:
+	return siege.zone_of_point(p) if siege != null else 0
+
+
+func _target_zone(tg: int) -> int:
+	if tg == TARGET_PLAYER:
+		return siege.zone_of_point(player.global_position)
+	return siege.zone_of(lvl[tg], pos[tg].x)
+
+
+func _ladder_pref(i: int) -> int:
+	var sq := squad[i]
+	if squad_role[sq] == Role.RAM:
+		return -1
+	return squad_ladder[sq]
+
+
+## 攻城戰的目標過濾：守方近戰不追出城外（城門破了才守門口）、不追梯子下半段的人；騎兵不上牆
+func _siege_can_target(i: int, j: int) -> bool:
+	var zj := siege.zone_of(lvl[j], pos[j].x)
+	if utype[i] == UnitType.CAVALRY and (zj == SiegeMap.Zone.WALL or zj == SiegeMap.Zone.LADDER):
+		return false
+	if team[i] != siege_attacker and utype[i] == UnitType.ARCHER and lvl[i] == 1 and zj != SiegeMap.Zone.WALL:
+		# 牆頂弓兵不射正下方（箭會被牆擋住），改射離牆遠一點的人
+		return pos[j].x < SiegeMap.WALL_X0 - 5.0 or pos[j].x > SiegeMap.WALL_X1
+	if team[i] == siege_attacker or utype[i] == UnitType.ARCHER or sortie:
+		return true
+	if zj == SiegeMap.Zone.OUT:
+		return siege.gate_broken and pos[j].x > SiegeMap.WALL_X0 - 14.0 and absf(pos[j].z) < 16.0
+	if zj == SiegeMap.Zone.LADDER:
+		return pos[j].y > siege.wall_top() - 2.6
+	return true
+
+
+func _siege_can_target_player(i: int) -> bool:
+	var zp := siege.zone_of_point(player.global_position)
+	if utype[i] == UnitType.CAVALRY and (zp == SiegeMap.Zone.WALL or zp == SiegeMap.Zone.LADDER):
+		return false
+	if team[i] == siege_attacker or utype[i] == UnitType.ARCHER or sortie:
+		return true
+	if zp == SiegeMap.Zone.OUT:
+		return siege.gate_broken and player.global_position.x > SiegeMap.WALL_X0 - 14.0
+	if zp == SiegeMap.Zone.LADDER:
+		return player.global_position.y > siege.wall_top() - 2.6
+	return true
+
+
+## 0 = 直接對目標行動（走過去打／射箭）、1 = 目標在別層，走導航點、2 = 不理目標，回到隊形位置
+func _siege_mode(i: int, tg: int, tp: Vector3) -> int:
+	var p := pos[i]
+	var dy := absf(tp.y - p.y)
+	var hd := Vector2(tp.x - p.x, tp.z - p.z).length()
+	var sq := squad[i]
+	if squad_role[sq] == Role.RAM and not siege.gate_broken:
+		# 推槌兵：只還手貼身的敵人，其餘時間顧著推槌
+		return 0 if (dy < 1.7 and hd < 2.6) else 2
+	var mz := siege.zone_of(lvl[i], p.x)
+	var tz := _target_zone(tg)
+	var order := squad_order[sq]
+	if utype[i] == UnitType.ARCHER and (hd > ARCHER_MIN_RANGE or dy > 1.7):
+		if hd <= archer_range(p.y - tp.y):
+			return 0
+		if order == Order.CHARGE:
+			return 0 if mz == tz else 1
+		return 2
+	if dy < 1.7:
+		if lvl[i] == 0 and siege.gate_broken and siege.crosses_wall(p, tp):
+			return 1
+		return 0
+	if order != Order.CHARGE and squad_role[sq] != Role.NORMAL and hd > engage_radius:
+		return 2
+	return 1
+
+
+## 衝鋒但附近沒有可打的敵人時要去哪裡：攻方 → 指定雲梯的梯頂（城門破了就進城）；守方 → 原位
+func _siege_objective(i: int) -> Vector3:
+	var sq := squad[i]
+	if squad_team[sq] == siege_attacker:
+		if siege.gate_broken or siege.zone_of(lvl[i], pos[i].x) == SiegeMap.Zone.WALL:
+			_obj_zone = SiegeMap.Zone.IN
+			return Vector3(30.0, 0, clampf(pos[i].z, -20.0, 20.0))
+		var lk := squad_ladder[sq] if squad_ladder[sq] >= 0 else siege.nearest_ladder(pos[i].z)
+		_obj_zone = SiegeMap.Zone.WALL
+		return Vector3(SiegeMap.WALK_X0 + 1.4, 0, SiegeMap.LADDER_Z[lk])
+	_obj_zone = squad_zone[sq]
+	return slot_position(sq, slot[i])
+
+
+## 在牆頂集結：同陣營小隊沿走道南北排開
+func _wall_rally(s: int, at: Vector3) -> Vector3:
+	var idx := 0
+	var total := 0
+	for o in squad_count:
+		if squad_team[o] == squad_team[s]:
+			if o < s:
+				idx += 1
+			total += 1
+	return Vector3(SiegeMap.WALK_X0 + 0.8, 0, at.z + (idx - (total - 1) * 0.5) * 7.5)
+
+
+## 攻城戰開局：攻方 n_att 人在城外西側，守方 n_def 人在牆上與城內
+func spawn_siege(attacker: int, n_att := 400, n_def := 200) -> void:
+	_clear()
+	_reset_arrows()
+	siege_attacker = attacker
+	siege.reset()
+	var defender := 1 - attacker
+	var fwd_a := Vector3(1, 0, 0)
+	var fwd_d := Vector3(-1, 0, 0)
+	var ladders: Array = SiegeMap.LADDER_Z
+	# ---- 攻方 ----
+	var n_sq := int(ceil(float(n_att) / squad_size))
+	var n_arc := roundi(n_sq * 0.25)
+	var n_cav := roundi(n_sq * 0.10)
+	var n_ram := 2
+	var n_lad := n_sq - n_arc - n_cav - n_ram
+	var remaining := n_att
+	var plan: Array = []          # [type, anchor, role, ladder/offset, order, zone]
+	for k in n_ram:
+		plan.append([UnitType.INFANTRY, siege.ram_pos, Role.RAM, k * 10, Order.CHARGE, SiegeMap.Zone.OUT])
+	for k in n_lad:
+		var lk := k % ladders.size()
+		var j := k / ladders.size()
+		var col := j % 2
+		var row := j / 2
+		var lz: float = ladders[lk]
+		plan.append([UnitType.INFANTRY, Vector3(-24.0 - row * 5.5, 0, lz + (col - 0.5) * 7.5), Role.NORMAL, lk, Order.HOLD, SiegeMap.Zone.OUT])
+	var arc_z := [-56.0, -47.0, -40.0, -22.0, -6.0, 6.0, 29.0, 37.0, 45.0, 53.0]
+	for k in n_arc:
+		var az: float = arc_z[k % arc_z.size()] + (k / arc_z.size()) * 3.0
+		plan.append([UnitType.ARCHER, Vector3(-19.0 - (k / arc_z.size()) * 4.0, 0, az), Role.NORMAL, -1, Order.HOLD, SiegeMap.Zone.OUT])
+	var cav_z := [-12.0, 12.0, -40.0, 40.0, -26.0, 26.0]
+	for k in n_cav:
+		plan.append([UnitType.CAVALRY, Vector3(-52.0, 0, cav_z[k % cav_z.size()]), Role.RESERVE, -1, Order.HOLD, SiegeMap.Zone.OUT])
+	for e in plan:
+		var sq := _add_squad(attacker, e[1], fwd_a, e[0])
+		squad_role[sq] = e[2]
+		squad_ladder[sq] = e[3]
+		squad_order[sq] = e[4]
+		squad_zone[sq] = e[5]
+		var members := mini(squad_size, remaining)
+		remaining -= members
+		for m in members:
+			_add_soldier(attacker, sq, m)
+	# ---- 守方 ----
+	n_sq = int(ceil(float(n_def) / squad_size))
+	n_arc = roundi(n_sq * 0.3)
+	var n_inf := n_sq - n_arc
+	remaining = n_def
+	plan.clear()
+	var wall_x := SiegeMap.WALK_X0 + 0.7
+	var d_arc_z := [-44.0, -22.0, -6.0, 6.0, 30.0, 42.0, -52.0, 52.0]
+	for k in n_arc:
+		plan.append([UnitType.ARCHER, Vector3(wall_x, 0, d_arc_z[k % d_arc_z.size()]), Role.WALLGUARD, -1, SiegeMap.Zone.WALL])
+	var placed := 0
+	for lz in ladders:
+		for s in [-1.0, 1.0]:
+			if placed < n_inf:
+				plan.append([UnitType.INFANTRY, Vector3(wall_x + 0.4, 0, lz + s * 3.6), Role.WALLGUARD, -1, SiegeMap.Zone.WALL])
+				placed += 1
+	for s in [-1.0, 1.0]:
+		if placed < n_inf:
+			plan.append([UnitType.INFANTRY, Vector3(16.5, 0, s * 3.4), Role.GATE, -1, SiegeMap.Zone.IN])
+			placed += 1
+	var r_i := 0
+	while placed < n_inf:
+		plan.append([UnitType.INFANTRY, Vector3(27.0 + (r_i / 3) * 6.0, 0, -14.0 + (r_i % 3) * 14.0), Role.RESERVE, -1, SiegeMap.Zone.IN])
+		placed += 1
+		r_i += 1
+	for e in plan:
+		var sq := _add_squad(defender, e[1], fwd_d, e[0])
+		squad_role[sq] = e[2]
+		squad_ladder[sq] = e[3]
+		squad_order[sq] = Order.HOLD
+		squad_zone[sq] = e[4]
+		var members := mini(squad_size, remaining)
+		remaining -= members
+		for m in members:
+			_add_soldier(defender, sq, m)
+	_siege_start_counts = PackedInt32Array([alive_count[0], alive_count[1]])
+	if renderer:
+		renderer.setup(self)
+
+
+## 攻城槌：數槌旁的推槌兵、推進、撞門
+func _siege_step(delta: float) -> void:
+	var crew := 0
+	var rp := siege.ram_pos
+	for i in count:
+		if state[i] != State.DEAD and lvl[i] == 0 and squad_role[squad[i]] == Role.RAM:
+			var dx := pos[i].x - rp.x
+			var dz := pos[i].z - rp.z
+			if dx * dx + dz * dz < 10.0:
+				crew += 1
+	if siege.step_ram(delta, crew, siege_started):
+		cavalry_impact.emit(siege.gate_point() + Vector3(0, 2.0, 0), 14.0)
+		if siege.gate_broken:
+			_on_gate_broken()
+
+
+func _on_gate_broken() -> void:
+	if _gate_event_done:
+		return
+	_gate_event_done = true
+	siege_event.emit("城門被攻破！")
+	for s in squad_count:
+		if squad_team[s] == siege_attacker:
+			if squad_role[s] == Role.RAM or squad_role[s] == Role.RESERVE:
+				squad_role[s] = Role.NORMAL
+				squad_order[s] = Order.CHARGE
+				squad_ladder[s] = -1
+		elif squad_role[s] == Role.GATE or squad_role[s] == Role.RESERVE:
+			squad_order[s] = Order.CHARGE
+
+
+## 雙方指揮官（攻城戰版）
+func _siege_army_tick(delta: float) -> void:
+	_army_timer -= delta
+	if _army_timer > 0.0:
+		return
+	_army_timer = army_think
+	var att := siege_attacker
+	var dfd := 1 - att
+	if not siege_started and battle_time >= siege_start_delay:
+		siege_started = true
+		for s in squad_count:
+			if squad_team[s] == att and squad_type[s] == UnitType.INFANTRY:
+				squad_order[s] = Order.CHARGE
+		siege_event.emit("攻城開始！")
+	if siege.gate_broken:
+		_on_gate_broken()
+	# 守方：哪道梯子有攻方爬上牆，就從城內預備隊派一隊上去
+	var on_wall := PackedInt32Array([0, 0, 0])
+	var att_melee := 0
+	for i in count:
+		if state[i] == State.DEAD or team[i] != att:
+			continue
+		if utype[i] != UnitType.ARCHER:
+			att_melee += 1
+		if lvl[i] != 0:
+			var lk := siege.nearest_ladder(pos[i].z)
+			if absf(pos[i].z - SiegeMap.LADDER_Z[lk]) < 14.0:
+				on_wall[lk] += 1
+	for lk in on_wall.size():
+		if on_wall[lk] < 3:
+			continue
+		for s in squad_count:
+			if squad_team[s] == dfd and squad_role[s] == Role.RESERVE and squad_alive[s] > 0 and squad_order[s] == Order.HOLD:
+				squad_role[s] = Role.WALLGUARD
+				squad_zone[s] = SiegeMap.Zone.WALL
+				squad_anchor[s] = Vector3(SiegeMap.WALK_X0 + 1.0, 0, SiegeMap.LADDER_Z[lk] + rng.randf_range(-5.0, 5.0))
+				siege_event.emit("守軍增援第 %d 道雲梯" % (lk + 1))
+				break
+	# 攻方近戰兵死光了：弓兵也拔刀爬梯
+	if siege_started and att_melee == 0:
+		for s in squad_count:
+			if squad_team[s] == att and squad_order[s] != Order.CHARGE:
+				squad_order[s] = Order.CHARGE
+	# 攻方快打光了：守方出城追擊
+	if not sortie and siege_started and alive_count[att] <= maxi(12, int(alive_count[dfd] * 0.3)):
+		sortie = true
+		siege_event.emit("守軍出城追擊！")
+		for s in squad_count:
+			if squad_team[s] == dfd:
+				squad_order[s] = Order.CHARGE
+
+
+func _siege_stats_text() -> String:
+	var att := siege_attacker
+	var dfd := 1 - att
+	var you := "攻方" if att == 0 else "守方"
+	var left := maxf(siege_time_limit - battle_time, 0.0)
+	var ram := ""
+	if siege.gate_broken:
+		ram = "城門已破"
+	elif siege.ram_at_gate:
+		ram = "攻城槌撞門中（推槌 %d 人）" % siege.ram_crew
+	else:
+		ram = "攻城槌距城門 %.0f m（推槌 %d 人）" % [SiegeMap.RAM_STOP_X - siege.ram_pos.x, siege.ram_crew]
+	var s := "攻城戰（你是%s）　攻方 %d/%d　守方 %d/%d　城門 %d/%d　%s　剩餘 %d:%02d" % [
+		you, alive_count[att], _siege_start_counts[att], alive_count[dfd], _siege_start_counts[dfd],
+		int(siege.gate_hp), int(SiegeMap.GATE_HP), ram, int(left) / 60, int(left) % 60]
+	s += "\n戰場邏輯 %.2f ms（網格 %.2f／決策 %.2f［%d 次］／移動戰鬥 %.2f／箭矢 %.2f［%d 支］）　士兵畫面 %.2f ms" % [
+		t_total / 1000.0, t_grid / 1000.0, t_think / 1000.0, think_calls, t_move / 1000.0, t_arrows / 1000.0, arrows_in_flight, t_render / 1000.0]
+	if winner != -1:
+		var w := "攻方" if winner == att else "守方"
+		s += "\n%s勝利！%s（按 R 重開）" % [w, "（時間到）" if alive_count[0] > 0 and alive_count[1] > 0 else ""]
+	return s
+
+
+var dbg_arrow_kills := PackedInt32Array([0, 0])
+var dbg_melee_kills := PackedInt32Array([0, 0])
+var dbg_arrow_hits := PackedInt32Array([0, 0])
+var dbg_wall_block := PackedInt32Array([0, 0])
+var dbg_fired := PackedInt32Array([0, 0])
+
+
+func siege_debug() -> String:
+	var z := [[0, 0, 0, 0], [0, 0, 0, 0]]
+	for i in count:
+		if state[i] != State.DEAD:
+			z[team[i]][siege.zone_of(lvl[i], pos[i].x)] += 1
+	return "zones t0 %s t1 %s  arrowK %s meleeK %s fired %s hits %s wallblock %s" % [str(z[0]), str(z[1]), str(dbg_arrow_kills), str(dbg_melee_kills), str(dbg_fired), str(dbg_arrow_hits), str(dbg_wall_block)]
+
+
+# --- 雲梯排隊：每道梯子同時只能一個接一個爬（間距 LADDER_GAP），梯頂有敵人擋就上不去 ---
+const LADDER_GAP := 0.9
+var _lad_ids: Array = [PackedInt32Array(), PackedInt32Array(), PackedInt32Array()]
+
+
+func _build_ladder_queue() -> void:
+	for k in _lad_ids.size():
+		_lad_ids[k] = PackedInt32Array()
+	for i in count:
+		if lvl[i] == 2 and state[i] != State.DEAD:
+			var k := siege.nearest_ladder(pos[i].z)
+			var a: PackedInt32Array = _lad_ids[k]
+			a.append(i)
+			_lad_ids[k] = a
+
+
+func _ladder_foot_busy(z: float) -> bool:
+	var k := siege.nearest_ladder(z)
+	if absf(z - SiegeMap.LADDER_Z[k]) > SiegeMap.LADDER_HALF + 0.5:
+		return false
+	var foot := SiegeMap.WALL_X0 - SiegeMap.LADDER_RUN
+	for j in _lad_ids[k]:
+		if state[j] != State.DEAD and pos[j].x < foot + LADDER_GAP * 1.5:
+			return true
+	return false
+
+
+func _ladder_ahead_limit(i: int) -> float:
+	var k := siege.nearest_ladder(pos[i].z)
+	var lim := INF
+	var xi := pos[i].x
+	for j in _lad_ids[k]:
+		if j != i and state[j] != State.DEAD and pos[j].x > xi - 0.01 and (pos[j].x > xi or j > i):
+			lim = minf(lim, pos[j].x - LADDER_GAP)
+	return maxf(lim, xi) if lim != INF else INF
+
+
+func _ladder_top_blocked(i: int, p: Vector3) -> bool:
+	var top := siege.wall_top()
+	var ex := SiegeMap.WALK_X0 + 0.4
+	for j in count:
+		if team[j] != team[i] and state[j] != State.DEAD and lvl[j] == 1:
+			var dx := pos[j].x - ex
+			var dz := pos[j].z - p.z
+			if dx * dx + dz * dz < 0.95 * 0.95 and absf(pos[j].y - top) < 0.5:
+				return true
+	return false
+
