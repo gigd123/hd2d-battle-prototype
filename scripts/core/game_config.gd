@@ -45,12 +45,50 @@ var pitch_compensation := 0.85
 ## 啟動參數 --siege=attack|defend 直接進入
 var siege_mode := false
 var siege_side := -1
+## 野戰的戰鬥設定（初始選單填寫；直接開戰場時用預設值）。見 BattleSetup
+var setup: BattleSetup
+## 展示影片腳本（--scenario）沿用改版前的固定佈陣，鏡頭腳本才對得上
+var legacy_layout := false
+## 從初始選單進入戰場（結算畫面才有「回選單」可用）
+var from_menu := false
+const LAST_SETUP_PATH := "user://last_setup.json"
 
 
 func _ready() -> void:
 	_setup_input_map()
 	_parse_terrain_arg()
+	setup = BattleSetup.make_default()
+	setup.terrain_type = terrain_type
 	_parse_dev_args()
+	_parse_setup_args()
+
+
+## 戰鬥設定相關的啟動參數（方便雲端或批次測試，不必開選單）：
+##   --setup=檔案.json   讀入整份設定
+##   --per-side=N        雙方各 N 人（照預設比例）
+##   --side=blue|red|spectate   玩家陣營
+##   --mounted           玩家開局騎馬
+func _parse_setup_args() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--setup="):
+			var s := BattleSetup.load_json(a.get_slice("=", 1))
+			if s:
+				setup = s
+				terrain_type = s.terrain_type
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--per-side="):
+			var n := int(a.get_slice("=", 1))
+			setup.apply_preset(0, n)
+			setup.apply_preset(1, n)
+		elif a.begins_with("--side="):
+			var v := a.get_slice("=", 1)
+			setup.player_side = 1 if v == "red" else (-1 if v == "spectate" else 0)
+		elif a == "--mounted":
+			setup.player_mounted = true
+		elif a.begins_with("--map-size="):
+			setup.map_size = int(a.get_slice("=", 1))
+		elif a.begins_with("--terrain="):
+			setup.terrain_type = terrain_type
 
 
 func _parse_dev_args() -> void:
@@ -81,6 +119,7 @@ func _parse_dev_args() -> void:
 		elif a.begins_with("--art="):
 			art_mode = ArtMode.PLACEHOLDER if a.get_slice("=", 1) == "placeholder" else ArtMode.BAKED
 	if scenario != "":
+		legacy_layout = true
 		var r: Node = load("res://scripts/debug/scenario_runner.gd").new()
 		if shots != "":
 			r.set("shots_dir", shots)
@@ -222,8 +261,10 @@ func _parse_terrain_arg() -> void:
 
 func next_terrain() -> void:
 	terrain_type = (terrain_type + 1) % BattleTerrain.TYPE_KEYS.size()
+	setup.terrain_type = terrain_type
 
 
 func random_terrain() -> void:
 	var n := BattleTerrain.TYPE_KEYS.size()
 	terrain_type = (terrain_type + 1 + randi() % (n - 1)) % n
+	setup.terrain_type = terrain_type

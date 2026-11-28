@@ -69,13 +69,17 @@ func _build_visual() -> void:
 	visual.name = "HorseVisual"
 	_baked = GameConfig.baked_set("horse")
 	var rider_set := GameConfig.baked_set("knight")
+	# 馬衣與騎士的陣營色跟著主人（紅軍玩家是紅色）
+	var cloth: Color = CLOTH_TINT
+	if _owner_player and "tint" in _owner_player:
+		cloth = _owner_player.get("tint")
 	if _baked and rider_set:
-		visual.setup_main_baked(_baked, ["horse"], CLOTH_TINT, 2.4)
+		visual.setup_main_baked(_baked, ["horse"], cloth, 2.4)
 		# 騎士的圖層跟著騎手目前的武器（身體＋盾＋武器）；沒有騎手時先用預設武器
 		var layers: Array = ["body", "sword"]
 		if _owner_player and _owner_player.has_method("visual_layers"):
 			layers = _owner_player.call("visual_layers", rider_set)
-		visual.setup_attach_baked(rider_set, layers, "saddle", "seat", CLOTH_TINT)
+		visual.setup_attach_baked(rider_set, layers, "saddle", "seat", cloth)
 	else:
 		_baked = null
 		visual.setup_main(PlaceholderArt.horse_atlas(), PlaceholderArt.HORSE_FRAME, PlaceholderArt.HORSE_ROWS, PlaceholderArt.horse_anchors(), 2.4)

@@ -7,7 +7,8 @@ config_version=5
 
 config/name="HD-2D Battle Prototype"
 config/description="原創 HD-2D 中世紀騎馬軍團戰鬥：技術原型（全佔位素材）"
-run/main_scene="res://scenes/battlefield.tscn"
+run/main_scene="res://scenes/main_menu.tscn"
+config/version="0.3-testbed"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 

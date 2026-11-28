@@ -28,14 +28,21 @@ static var _cache: Dictionary = {}
 
 
 static func for_unit(ut: int) -> SoldierArt:
-	var key := "%d_%d" % [ut, GameConfig.art_mode]
+	return for_loadout(UnitDefs.default_for(ut))
+
+
+## 一種武器配置（UnitDefs 編號）的圖集：兵種決定身體（步行或騎馬），配置決定武器圖層、盾、攻擊動作
+static func for_loadout(l: int) -> SoldierArt:
+	var key := "lo%d_%d" % [l, GameConfig.art_mode]
 	if _cache.has(key):
 		return _cache[key]
+	var d := UnitDefs.get_def(l)
+	var ut: int = d["unit"]
 	var a := SoldierArt.new()
 	# 劍盾兵（BattleManager.UnitType.SWORDSMAN = 3）的佔位圖沿用步兵
 	var pu := PlaceholderArt.Unit.INFANTRY if ut >= 3 else ut
 	a.unit = pu
-	if not a._try_baked(ut):
+	if not a._try_baked(ut, d["layer"], d["shield"], d["anim"]):
 		a.baked = false
 		a.frame = PlaceholderArt.unit_frame(pu)
 		a.rows = PlaceholderArt.unit_rows(pu)
@@ -119,25 +126,42 @@ func _row(action: String, t: float, progress: float) -> int:
 # ---------------------------------------------------------------------------
 # 合成預渲染圖集
 # ---------------------------------------------------------------------------
-func _try_baked(ut: int) -> bool:
+func _try_baked(ut: int, layer: String, shield: bool, anim: String) -> bool:
 	var knight := GameConfig.baked_set("knight")
 	if knight == null:
 		return false
+	# 舊的烘焙圖沒有該武器圖層或動作時退回劍與一般揮砍
+	if not knight.has_layer(layer):
+		layer = "sword"
+		anim = "swing"
+	if anim == "bow" and not knight.has_action("bow_shoot"):
+		layer = "sword"
+		anim = "swing"
 	if ut == PlaceholderArt.Unit.CAVALRY:
 		var horse := GameConfig.baked_set("horse")
 		if horse == null:
 			return false
-		_compose_cavalry(horse, knight)
+		_compose_cavalry(horse, knight, layer, shield, anim)
 	else:
-		# 步兵：長槍＋盾；弓兵：弓（沒有盾）。舊的烘焙圖沒有弓／盾圖層時退回劍
-		var weapon := "spear" if ut == PlaceholderArt.Unit.INFANTRY and knight.has_layer("spear") else "sword"
-		if ut == PlaceholderArt.Unit.ARCHER and knight.has_layer("bow") and knight.has_action("bow_shoot"):
-			weapon = "bow"
-		if ut == 3:
-			weapon = "sword"      # 劍盾兵
-		_compose_foot(knight, weapon, weapon != "bow")
+		_compose_foot(knight, layer, shield, anim)
 	baked = true
 	return true
+
+
+## 動作組 → [原地攻擊, 邊走邊攻擊, 騎乘攻擊] 的動作名
+static func _attack_actions(bs: BakedSpriteSet, anim: String) -> Array:
+	var out := ["attack_a", "walk_attack_a", "ride_attack_a"]
+	match anim:
+		"thrust":
+			out = ["thrust", "walk_thrust", "ride_thrust"]
+		"heavy":
+			out = ["heavy_a", "walk_heavy_a", "ride_heavy_a"]
+		"bow":
+			out = ["bow_shoot", "", "ride_bow"]
+	for k in 3:
+		if out[k] != "" and not bs.has_action(out[k]):
+			out[k] = ["attack_a", "walk_attack_a", "ride_attack_a"][k]
+	return out
 
 
 static func _layer_image(bs: BakedSpriteSet, layer: String) -> Image:
@@ -151,19 +175,17 @@ static func _mask_image(bs: BakedSpriteSet, layer: String) -> Image:
 
 
 ## 步兵／弓兵：同一組圖的 idle、walk、run、attack_a、death 五個動作，身體＋武器壓成一張
-func _compose_foot(bs: BakedSpriteSet, weapon: String, with_shield := true) -> void:
+func _compose_foot(bs: BakedSpriteSet, weapon: String, with_shield: bool, anim: String) -> void:
 	frame = bs.frame_size
 	pixel_size = bs.pixel_size
 	origin = bs.origin
-	# 邊走邊攻擊：下半身繼續走路、上半身出手（步兵拿長槍用刺擊，弓兵拿劍用揮砍）
-	var atk := "thrust" if weapon == "spear" and bs.has_action("thrust") else "attack_a"
-	var watk := "walk_thrust" if weapon == "spear" else "walk_attack_a"
-	if weapon == "bow":
-		atk = "bow_shoot"
-		watk = ""
+	# 邊走邊攻擊：下半身繼續走路、上半身出手（動作依武器：刺、揮砍、雙手重擊、拉弓）
+	var acts := _attack_actions(bs, anim)
+	var atk: String = acts[0]
+	var watk: String = acts[1]
 	var pick := ["idle", "walk", "run", atk, "death"]
 	var names := ["idle", "walk", "run", "attack", "death"]
-	if bs.has_action(watk):
+	if watk != "" and bs.has_action(watk):
 		pick.append(watk)
 		names.append("walk_attack")
 	var total := 0
@@ -206,14 +228,14 @@ func _clear_mask_under(src_img: Image, src: Rect2i, dst: Vector2i) -> void:
 
 
 ## 騎兵：馬（gallop、idle）＋騎士（ride_idle、ride_attack_a）依錨點合成；death 用騎士倒地
-func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet) -> void:
+func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet, weapon: String, with_shield: bool, anim: String) -> void:
 	pixel_size = horse.pixel_size
 	frame = Vector2i(maxi(horse.frame_size.x, knight.frame_size.x), horse.frame_size.y + CAV_TOP_PAD)
 	origin = Vector2(frame.x * 0.5, horse.origin.y + CAV_TOP_PAD)
 	var gallop: Dictionary = horse.actions["gallop"]
 	var h_idle: Dictionary = horse.actions["idle"]
 	var r_idle: Dictionary = knight.actions["ride_idle"]
-	var r_atk: Dictionary = knight.actions["ride_thrust" if knight.has_layer("spear") and knight.has_action("ride_thrust") else "ride_attack_a"]
+	var r_atk: Dictionary = knight.actions[_attack_actions(knight, anim)[2]]
 	var trot: Dictionary = horse.actions.get("trot", gallop)
 	var death: Dictionary = knight.actions["death"]
 	# 每列 = [馬的列, 騎士的列 或 -1, 只畫騎士倒地]
@@ -249,8 +271,8 @@ func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet) -> void:
 	var h_mask := _mask_image(horse, "horse")
 	var k_body := _layer_image(knight, "body")
 	var k_mask := _mask_image(knight, "body")
-	var k_wpn := _layer_image(knight, "spear" if knight.has_layer("spear") else "sword")
-	var k_sh: Image = _layer_image(knight, "shield") if knight.has_layer("shield") else null
+	var k_wpn := _layer_image(knight, weapon)
+	var k_sh: Image = _layer_image(knight, "shield") if with_shield and knight.has_layer("shield") else null
 	var k_sh_mask: Image = _mask_image(knight, "shield") if k_sh else null
 	var hfs := horse.frame_size
 	var kfs := knight.frame_size
