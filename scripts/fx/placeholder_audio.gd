@@ -36,6 +36,22 @@ static func hit() -> AudioStreamWAV:
 	return _cache["hit"]
 
 
+## 遠程命中確認：兩個短促的高音（「叮」），讓玩家在遠處也知道箭射中了；kill = 再加一個更高的音
+static func hit_confirm(kill := false) -> AudioStreamWAV:
+	var key := "confirm_k" if kill else "confirm"
+	if not _cache.has(key):
+		var n := int(RATE * (0.22 if kill else 0.12))
+		var data := PackedFloat32Array()
+		data.resize(n)
+		for i in n:
+			var t := float(i) / RATE
+			var f := 1500.0 if t < 0.06 or not kill else 2100.0
+			var tt := fmod(t, 0.06) if kill else t
+			data[i] = sin(TAU * f * t) * exp(-tt * 45.0) * 0.55
+		_cache[key] = _make(data)
+	return _cache[key]
+
+
 ## 金屬碰撞聲（士兵之間刀槍相擊）：幾個不成倍數的正弦快速衰減，像「鏘」。
 static func clang() -> AudioStreamWAV:
 	if not _cache.has("clang"):

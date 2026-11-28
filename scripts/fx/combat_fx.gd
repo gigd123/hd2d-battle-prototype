@@ -55,6 +55,7 @@ func setup(p_player: PlayerController, p_cam: OrbitFollowCamera, p_battle: Battl
 	player.hit_detail.connect(_on_hit)
 	player.damaged.connect(_on_damaged)
 	player.blocked.connect(_on_blocked)
+	player.arrow_hit_confirmed.connect(_on_arrow_confirmed)
 	player.weapon_stuck.connect(_on_weapon_stuck)
 
 
@@ -229,6 +230,12 @@ func _on_damaged(amount: float) -> void:
 		var lbl: Label3D = _numbers[-1][0]
 		lbl.modulate = Color(1.0, 0.2, 0.2)
 		lbl.font_size = 22
+
+
+## 箭射中（遠處也聽得到的命中確認音；火花加大）
+func _on_arrow_confirmed(point: Vector3, _damage: float, killed: bool) -> void:
+	_play(PlaceholderAudio.hit_confirm(killed), 1.0, -4.0)
+	_burst(point, true)
 
 
 ## 舉盾擋下：金屬撞擊聲、火花、輕微震動（不閃紅、不停頓太久）

@@ -50,6 +50,7 @@ func _ready() -> void:
 		horse.battle = battle
 		player.battle = battle
 		player.hit_landed.connect(_on_hit_landed)
+		player.arrow_hit_confirmed.connect(func(p: Vector3, d: float, k: bool): hud.on_arrow_hit(p, d, k))
 		player.weapon_changed.connect(func(_n: String): hud.toast(WeaponDefs.summary(player.wdef), 3.0))
 
 	if not stress_mode:
