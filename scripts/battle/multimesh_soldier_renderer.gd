@@ -1,6 +1,6 @@
 class_name MultiMeshSoldierRenderer
 extends SoldierRenderer
-## 實作 B：每個兵種一個 MultiMesh（共 3 次 draw call），幀、翻轉、閃白、變暗放在每實例的自訂資料，
+## 實作 B：每種武器配置一個 MultiMesh（用到幾種就幾次 draw call），幀、翻轉、閃白、變暗放在每實例的自訂資料，
 ## 陣營色放在實例顏色，由 soldier_billboard.gdshader 在 GPU 上做 Billboard、切幀與調色盤交換。
 ## 每幀用一整塊 PackedFloat32Array 更新（比逐一 set_instance_transform 快）。
 
@@ -21,17 +21,25 @@ func _create(bm: BattleManager) -> void:
 	_mms.clear()
 	_bufs.clear()
 	_mats.clear()
-	var counts := [0, 0, 0, 0]
+	var counts := []
+	counts.resize(UnitDefs.count())
+	counts.fill(0)
 	_kind.resize(bm.count)
 	_slot.resize(bm.count)
 	for i in bm.count:
-		var ut := bm.utype[i]
-		_kind[i] = ut
-		_slot[i] = counts[ut]
-		counts[ut] += 1
+		var l := bm.lo[i]
+		_kind[i] = l
+		_slot[i] = counts[l]
+		counts[l] += 1
 	var shader: Shader = load("res://shaders/soldier_billboard.gdshader")
-	for ut in 4:
+	for ut in UnitDefs.count():
 		var art: SoldierArt = _arts[ut]
+		if art == null:
+			# 沒用到的配置：放一個空的佔位，讓索引對齊
+			_mms.append(null)
+			_bufs.append(PackedFloat32Array())
+			_mats.append(null)
+			continue
 		var frame := art.frame
 		var quad := QuadMesh.new()
 		quad.size = Vector2(frame) * art.pixel_size
@@ -99,6 +107,8 @@ func _draw_soldier(i: int, p: Vector3, frame: int, flip: bool, flash: float, dar
 
 func _end_frame() -> void:
 	for k in _mms.size():
+		if _mms[k] == null:
+			continue
 		_mats[k].set_shader_parameter("full_billboard", GameConfig.use_full_billboard())
 		if _mms[k].instance_count > 0:
 			_mms[k].buffer = _bufs[k]

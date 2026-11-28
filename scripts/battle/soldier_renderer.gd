@@ -13,15 +13,18 @@ var _arrow_mmi: MultiMeshInstance3D
 var _n := 0
 
 
-## 每個兵種的圖集（佔位圖或預渲染圖），依 GameConfig.art_mode 決定
+## 每種武器配置的圖集（索引 = UnitDefs 編號；沒用到的配置是 null，不合成），依 GameConfig.art_mode 決定
 var _arts: Array[SoldierArt] = []
 
 
 func setup(bm: BattleManager) -> void:
 	_n = bm.count
 	_arts.clear()
-	for ut in 4:
-		_arts.append(SoldierArt.for_unit(ut))
+	_arts.resize(UnitDefs.count())
+	for i in bm.count:
+		var l := bm.lo[i]
+		if _arts[l] == null:
+			_arts[l] = SoldierArt.for_loadout(l)
 	_create(bm)
 	_setup_shadows(_n)
 	_setup_arrows()
@@ -55,7 +58,7 @@ func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 		var dead := st == BattleManager.State.DEAD
 		var visible_now := not dead or (now - bm.dead_time[i]) < bm.corpse_time
 		var dir := DirectionUtil.resolve_with(bm.facing[i], cam_basis, dir_count, mirror)
-		var art: SoldierArt = _arts[ut]
+		var art: SoldierArt = _arts[bm.lo[i]]
 		var anim := bm.atk_anim[i]
 		var kind := SoldierArt.Kind.IDLE
 		var t := now + i * 0.37

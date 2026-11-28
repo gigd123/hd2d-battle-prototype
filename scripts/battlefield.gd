@@ -19,15 +19,27 @@ var siege_map: SiegeMap = null          # 攻城戰時才有
 
 ## 壓力測試模式：不建立玩家輸入，相機自動繞場
 var stress_mode := false
+## 這場的戰鬥設定（GameConfig.setup）；攻城戰、壓力測試、展示腳本沿用舊的固定佈陣，為 null
+var setup: BattleSetup = null
+## 觀戰：設定裡沒有玩家（玩家節點存在但隱藏、不參戰）
+var spectator := false
+var menus: BattleMenus
 
 
 func _ready() -> void:
+	if not (stress_mode or GameConfig.siege_mode or GameConfig.legacy_layout):
+		setup = GameConfig.setup
+		GameConfig.battle_seed = setup.seed_value
+		GameConfig.terrain_type = setup.terrain_type
+		spectator = setup.player_side < 0
 	seed(GameConfig.battle_seed)
 	_build_environment()
 	terrain = BattleTerrain.new()
 	terrain.name = "Terrain"
 	terrain.seed_value = GameConfig.battle_seed
 	terrain.terrain_type = GameConfig.terrain_type
+	if setup:
+		terrain.size_m = setup.resolved_map_size()
 	if GameConfig.siege_mode:
 		terrain.siege_layout = true
 		terrain.terrain_type = BattleTerrain.Type.PLAINS
@@ -61,18 +73,24 @@ func _ready() -> void:
 	battle.name = "BattleManager"
 	battle.auto_charge_both = stress_mode
 	add_child(battle)
-	battle.setup(terrain, null if stress_mode else player)
+	if setup and not spectator:
+		player.configure(setup.player_side, setup.player_weapons)
+		player.respawn_enabled = setup.player_respawn
+	battle.setup(terrain, null if (stress_mode or spectator) else player)
 	battle.siege = siege_map
 	battle.set_renderer(make_renderer())
 	_spawn_soldiers()
+	if setup and not spectator:
+		_place_player_for_setup()
 	battle.battle_finished.connect(_on_battle_finished)
 	battle.siege_event.connect(func(t: String): if hud: hud.toast(t, 3.0))
-	if not stress_mode:
+	if not stress_mode and not spectator:
 		horse.battle = battle
 		player.battle = battle
 		player.hit_landed.connect(_on_hit_landed)
 		player.arrow_hit_confirmed.connect(func(p: Vector3, d: float, k: bool): hud.on_arrow_hit(p, d, k))
 		player.weapon_changed.connect(func(_n: String): hud.toast(WeaponDefs.summary(player.wdef), 3.0))
+		player.died.connect(_on_player_died)
 
 	if not stress_mode:
 		var fx := CombatFX.new()
@@ -88,13 +106,23 @@ func _ready() -> void:
 
 	hud = BattleHUD.new()
 	hud.name = "HUD"
-	hud.player = player
+	hud.player = null if spectator else player
 	hud.battle = battle
 	hud.visible = not stress_mode
 	add_child(hud)
 
+	menus = BattleMenus.new()
+	menus.name = "Menus"
+	menus.battle = battle
+	menus.player = null if (stress_mode or spectator) else player
+	menus.setup = setup
+	add_child(menus)
+
 	apply_postfx()
-	if stress_mode:
+	if spectator:
+		cam_rig.toggle_spectate(battle_center())
+		hud.toast("觀戰模式：雙方 AI 對打（滑鼠／滾輪調整鏡頭，Esc 暫停）", 5.0)
+	elif stress_mode:
 		cam_rig.auto_orbit = true
 		cam_rig.distance = 38.0
 		cam_rig.pitch_deg = 40.0
@@ -107,7 +135,7 @@ func _ready() -> void:
 			else:
 				hud.toast("攻城戰：你是守方（200 人）。守住城牆與城門 10 分鐘（F11 換攻方）", 5.0)
 		else:
-			hud.toast("場地：%s　%s（F8 換場地／F9 隨機／F10 攻城戰）" % [terrain.type_name(), BattleTerrain.TYPE_HINTS[terrain.terrain_type]], 4.0)
+			hud.toast("場地：%s　%s（%d m）　Esc 暫停／回選單" % [terrain.type_name(), BattleTerrain.TYPE_HINTS[terrain.terrain_type], terrain.size_m], 4.0)
 
 
 func _spawn_player_and_horse(at: Vector3) -> void:
@@ -131,16 +159,23 @@ func _spawn_player_and_horse(at: Vector3) -> void:
 	player.facing = Vector3(1, 0, 0)
 	cam_rig.target = player
 	cam_rig.yaw = -PI * 0.5      # 從玩家背後看向戰場（+X 方向）
-	if stress_mode:
-		# 壓力測試只量士兵：玩家與馬隱藏且不更新
+	if stress_mode or spectator:
+		# 壓力測試／觀戰只有士兵：玩家與馬隱藏且不更新
 		for n: Node3D in [player, horse]:
 			n.visible = false
 			n.process_mode = Node.PROCESS_MODE_DISABLED
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if menus and menus.is_open():
+		if event.is_action_pressed("release_mouse"):
+			menus.close()
+		return
 	if event.is_action_pressed("release_mouse"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED else Input.MOUSE_MODE_CAPTURED
+		if stress_mode:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED else Input.MOUSE_MODE_CAPTURED
+		elif _picker == null:
+			menus.toggle_pause()
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif event.is_action_pressed("cycle_directions"):
@@ -162,7 +197,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("swap_siege_side") and siege_map:
 		GameConfig.siege_side = 1 - GameConfig.siege_side
 		get_tree().reload_current_scene()
-	elif event.is_action_pressed("spectate"):
+	elif event.is_action_pressed("spectate") and not spectator:
 		var on := cam_rig.toggle_spectate(battle_center())
 		hud.toast("觀戰鏡頭（滾輪調整距離，V 返回）" if on else "回到玩家相機")
 	elif event.is_action_pressed("toggle_backend"):
@@ -170,8 +205,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		restart_battle()
 		hud.toast("士兵畫面後端：" + GameConfig.backend_name())
 	elif event.is_action_pressed("restart_battle"):
-		restart_battle()
-		hud.toast("重開戰局")
+		if setup or siege_map:
+			get_tree().reload_current_scene()
+		else:
+			restart_battle()
+			hud.toast("重開戰局")
 	elif event.is_action_pressed("order_charge"):
 		_order(BattleManager.Order.CHARGE, "全軍衝鋒！")
 	elif event.is_action_pressed("order_hold"):
@@ -211,8 +249,27 @@ func _spawn_soldiers() -> void:
 	if siege_map:
 		# 玩家永遠是陣營 0：當攻方時陣營 0 = 攻方（400 人），當守方時陣營 0 = 守方（200 人）
 		battle.spawn_siege(0 if GameConfig.siege_side == 0 else 1, 400, 200)
+	elif setup:
+		battle.spawn_from_setup(setup)
 	else:
 		battle.spawn_armies(soldiers_per_team)
+
+
+## 依設定放玩家：己方大軍後方中央、面向敵軍；騎馬開局直接在馬上
+func _place_player_for_setup() -> void:
+	var side := setup.player_side
+	var x: float = battle.rear_x[side]
+	var p := Vector3(x, terrain.get_height(x, 0.0) + 0.1, 0.0)
+	var fwd := Vector3(1, 0, 0) if side == 0 else Vector3(-1, 0, 0)
+	player.spawn_point = p
+	player.global_position = p
+	player.velocity = Vector3.ZERO
+	player.facing = fwd
+	var hp := p + Vector3(0, 0, 2.5)
+	horse.teleport(Vector3(hp.x, terrain.get_height(hp.x, hp.z) + 0.1, hp.z), atan2(fwd.x, fwd.z))
+	cam_rig.yaw = -PI * 0.5 if side == 0 else PI * 0.5
+	if setup.player_mounted:
+		player.mount_instant()
 
 
 ## 攻城戰的玩家位置：攻方在大軍後方；守方站在第二道雲梯旁的牆頂，馬留在城內
@@ -274,10 +331,10 @@ func _show_side_picker() -> void:
 
 
 func _order(order: int, text: String) -> void:
-	if stress_mode or player == null:
+	if stress_mode or spectator or player == null:
 		return
 	# 命令只是寫入佇列；集結點 = 玩家目前位置，面向玩家朝向
-	battle.issue_order(0, order, player.global_position, player.facing)
+	battle.issue_order(player.team, order, player.global_position, player.facing)
 	hud.toast(text)
 
 
@@ -287,7 +344,36 @@ func _on_hit_landed(hits: int, dmg: float) -> void:
 
 func _on_battle_finished(winner: int) -> void:
 	if hud:
-		hud.toast(("我軍勝利！" if winner == 0 else "敵軍勝利！") + "（按 R 重開）", 5.0)
+		hud.toast(battle.winner_text(winner) + "！", 3.0)
+	# 批次測試用：--print-results 在分出勝負時把結算文字印到主控台後結束
+	if "--print-results" in OS.get_cmdline_user_args():
+		print(menus.results_text())
+		get_tree().quit()
+		return
+	# 野戰：稍等一下讓最後一擊演完，再跳結算畫面（攻城戰、壓力測試照舊只顯示提示）
+	if setup and menus:
+		get_tree().create_timer(2.0).timeout.connect(func():
+			if is_instance_valid(menus):
+				menus.show_results()
+				_maybe_results_shot())
+
+
+## 開發用：--results-shot=路徑.png 在結算畫面出現後截圖並結束
+func _maybe_results_shot() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--results-shot="):
+			for k in 10:
+				await get_tree().process_frame
+			get_viewport().get_texture().get_image().save_png(a.get_slice("=", 1))
+			get_tree().quit()
+
+
+## 玩家陣亡且不重生：改成觀戰鏡頭，看到分出勝負
+func _on_player_died() -> void:
+	if player.respawn_enabled or cam_rig.spectating:
+		return
+	cam_rig.toggle_spectate(battle_center())
+	hud.toast("你陣亡了，改為觀戰（Esc 暫停）", 4.0)
 
 
 func apply_postfx() -> void:
@@ -370,7 +456,7 @@ var _center_timer := 0.0
 
 func _process(delta: float) -> void:
 	# 遮擋淡化：玩家（或騎乘中的馬上騎士）被樹、岩石擋住時，擋住的部分變成點陣半透明
-	if terrain and player and not stress_mode:
+	if terrain and player and not stress_mode and not spectator:
 		var vp: Vector3 = horse.visual_position() if player.mounted else player.visual_position()
 		terrain.set_occlusion_target(vp + Vector3(0, 1.9 if player.mounted else 1.0, 0))
 	# 觀戰中每半秒更新一次繞場中心，相機會平滑地跟著戰線移動

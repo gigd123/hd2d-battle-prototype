@@ -47,6 +47,9 @@ var _ob_grid: Array = []           # 每格一個 Array[Vector3]
 var _ob_w := 0
 var _ob_empty: Array[Vector3] = []
 var _half := 0.0
+## 場地特徵（山脊、河道、林區、岩石）的縮放倍率 = 地圖邊長 / 160。地圖放大時特徵等比例放大，
+## 位置相對整張地圖不變；起伏雜訊不縮放，大地圖的細節密度一樣
+var _k := 1.0
 var _noise := FastNoiseLite.new()
 ## 會遮住玩家的物體（樹、岩石）的材質：每幀由戰場更新 occl_target，玩家附近的部分會以點陣淡化成半透明
 var occluder_materials: Array[ShaderMaterial] = []
@@ -88,6 +91,7 @@ func type_name() -> String:
 func build() -> void:
 	samples = int(size_m / cell) + 1
 	_half = size_m * 0.5
+	_k = 1.0 if siege_layout else size_m / 160.0
 	_noise.seed = seed_value
 	_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	_noise.frequency = 0.012
@@ -188,11 +192,13 @@ func obstacles_near(x: float, z: float) -> Array[Vector3]:
 
 ## 河道中心線（河谷場地）：沿 Z 方向蜿蜒
 func river_center(z: float) -> float:
-	return sin(z * 0.035) * 7.0 + sin(z * 0.011 + 1.3) * 4.0
+	var zs := z / _k
+	return (sin(zs * 0.035) * 7.0 + sin(zs * 0.011 + 1.3) * 4.0) * _k
 
 
 ## 淺灘（0..1）
 func _ford(z: float) -> float:
+	z /= _k
 	return maxf(1.0 - smoothstep(3.0, 8.0, absf(z + 24.0)), 1.0 - smoothstep(3.0, 8.0, absf(z - 22.0)))
 
 
@@ -215,17 +221,19 @@ func _height_at(x: float, z: float) -> float:
 			h = n * 2.2 * lerpf(0.4, 1.0, smoothstep(0.2, 0.8, r))
 		Type.HILLS:
 			h = n * 9.0 * lerpf(0.4, 1.0, smoothstep(0.15, 0.8, r))
-			# 敵軍陣地的山脊（東側），我方要仰攻
-			var zf := 1.0 - smoothstep(26.0, 46.0, absf(z))
-			h += smoothstep(8.0, 34.0, x) * 9.0 * zf
+			# 敵軍陣地的山脊（東側），我方要仰攻（座標以 160 m 地圖為準，依 _k 等比放大）
+			var xs := x / _k
+			var zs := z / _k
+			var zf := 1.0 - smoothstep(26.0, 46.0, absf(zs))
+			h += smoothstep(8.0, 34.0, xs) * 9.0 * zf
 			# 我方後方的小丘與北側高地
-			h += _bump(x, z, -44.0, 24.0, 15.0) * 6.0
-			h += _bump(x, z, -6.0, -46.0, 18.0) * 8.0
+			h += _bump(xs, zs, -44.0, 24.0, 15.0) * 6.0
+			h += _bump(xs, zs, -6.0, -46.0, 18.0) * 8.0
 		Type.FOREST:
 			h = n * 4.0 * lerpf(0.5, 1.0, smoothstep(0.15, 0.8, r))
 		Type.RIVER:
 			var dx := absf(x - river_center(z))
-			h = smoothstep(4.0, 48.0, dx) * 9.0 + n * 2.0 * smoothstep(8.0, 24.0, dx)
+			h = smoothstep(4.0, 48.0 * _k, dx) * 9.0 + n * 2.0 * smoothstep(8.0, 24.0, dx)
 			var bed := lerpf(-1.15, -0.42, _ford(z))
 			h = lerpf(bed, h, smoothstep(3.0, 7.0, dx))
 		Type.SNOW:
@@ -371,7 +379,8 @@ void fragment() {
 		spots = [Vector2(-8, 14), Vector2(20, 18), Vector2(-4, -30)]
 	elif terrain_type == Type.SNOW or terrain_type == Type.HILLS:
 		spots.append_array([Vector2(28, -22), Vector2(34, 10), Vector2(-40, -18)])
-	for s in spots:
+	for s0 in spots:
+		var s: Vector2 = s0 * _k
 		var r := rng.randf_range(1.0, 2.0)
 		var hgt := rng.randf_range(1.5, 3.5)
 		if water_depth(s.x, s.y) > 0.0 or (water_level != -INF and get_height(s.x, s.y) < water_level + 0.5):
@@ -418,13 +427,14 @@ func _build_trees() -> void:
 		Type.SNOW:
 			decor_count = 130
 			tex = _pine_texture(true)
+	decor_count = int(decor_count * _k * _k)
 	var decor: Array[Vector3] = []
 	var tries := 0
-	while decor.size() < decor_count and tries < 4000:
+	while decor.size() < decor_count and tries < 4000 * int(ceil(_k * _k)):
 		tries += 1
 		var x := rng.randf_range(-_half + 6, _half - 6)
 		var z := rng.randf_range(-_half + 6, _half - 6)
-		if Vector2(x, z).length() < 45.0 or water_depth(x, z) > 0.0:
+		if Vector2(x, z).length() < 45.0 * _k or water_depth(x, z) > 0.0:
 			continue
 		if siege_layout and x > -4.0:
 			continue
@@ -438,11 +448,12 @@ func _build_trees() -> void:
 			want = 170
 		Type.RIVER:
 			want = 45
+	want = int(want * _k * _k)
 	tries = 0
-	while solid.size() < want and tries < 6000:
+	while solid.size() < want and tries < 6000 * int(ceil(_k * _k)):
 		tries += 1
-		var x := rng.randf_range(-52.0, 52.0)
-		var z := rng.randf_range(-48.0, 48.0)
+		var x := rng.randf_range(-52.0, 52.0) * _k
+		var z := rng.randf_range(-48.0, 48.0) * _k
 		if terrain_type == Type.FOREST:
 			if _grove.get_noise_2d(x, z) < 0.12:
 				continue
@@ -452,7 +463,7 @@ func _build_trees() -> void:
 			if dx < 7.5 or dx > 16.0 or _ford(z) > 0.2 or rng.randf() < 0.4:
 				continue
 		# 玩家出生點、土路留空
-		if Vector2(x + 30.0, z).length() < 7.0 or absf(z + x * 0.15) < 3.0:
+		if Vector2(x + 30.0 * _k, z).length() < 7.0 or absf(z + x * 0.15) < 3.0:
 			continue
 		var ok := true
 		for q in solid:

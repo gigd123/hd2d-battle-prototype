@@ -41,6 +41,19 @@ var terrain: BattleTerrain
 var battle: Node = null               # BattleManager（階段 2 起）
 var visual: LayeredActorVisual
 const PLAYER_TINT := Color(0.25, 0.45, 0.85)
+const PLAYER_TINT_RED := Color(0.85, 0.30, 0.25)
+## 衣服的陣營色（藍軍 PLAYER_TINT、紅軍 PLAYER_TINT_RED）；馬上騎士與馬衣也跟著用
+var tint := PLAYER_TINT
+## 這場攜帶的武器（WeaponDefs 編號）；空的 = 全部 12 把都能換
+var weapon_set: Array[int] = []
+## 陣亡後 4 秒在出生點重生；關掉的話陣亡就一直倒著（戰場改成觀戰）
+var respawn_enabled := true
+## 戰後統計
+var dmg_dealt := 0.0
+var dmg_taken := 0.0
+var arrows_fired := 0
+var arrows_hit := 0
+var deaths := 0
 var _baked: BakedSpriteSet = null     # 預渲染圖集（null = 用佔位圖）
 var spawn_point := Vector3.ZERO
 
@@ -112,9 +125,9 @@ func _build_visual() -> void:
 	visual.name = "PlayerVisual"
 	_baked = GameConfig.baked_set("knight")
 	if _baked:
-		visual.setup_main_baked(_baked, visual_layers(_baked), PLAYER_TINT)
+		visual.setup_main_baked(_baked, visual_layers(_baked), tint)
 	else:
-		visual.setup_main(PlaceholderArt.unit_atlas_tinted(PlaceholderArt.Unit.INFANTRY, PLAYER_TINT), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
+		visual.setup_main(PlaceholderArt.unit_atlas_tinted(PlaceholderArt.Unit.INFANTRY, tint), PlaceholderArt.HUMAN_FRAME, PlaceholderArt.HUMAN_ROWS)
 	add_child(visual)
 
 
@@ -127,10 +140,41 @@ func visual_layers(bs: BakedSpriteSet) -> Array:
 	return out
 
 
-## 換武器：dir = +1 下一把、-1 上一把
+## 依戰鬥設定配置玩家：陣營、攜帶武器（WeaponDefs id 陣列）
+func configure(p_team: int, weapon_ids: Array) -> void:
+	team = p_team
+	tint = PLAYER_TINT_RED if p_team == 1 else PLAYER_TINT
+	weapon_set.clear()
+	for w in weapon_ids:
+		var k := WeaponDefs.index_of(str(w))
+		if WeaponDefs.ALL[k]["id"] == str(w) and not weapon_set.has(k):
+			weapon_set.append(k)
+	if not weapon_set.is_empty():
+		weapon = weapon_set[0]
+		wdef = WeaponDefs.get_def(weapon)
+	_build_visual()
+	if horse:
+		horse.call("_build_visual")
+
+
+## 開局直接在馬上（不播上馬動作）
+func mount_instant() -> void:
+	if horse == null or mounted:
+		return
+	_start_mount()
+	_mount_t = -1.0
+	global_position = horse.global_position
+	facing = horse.forward()
+
+
+## 換武器：dir = +1 下一把、-1 上一把（有攜帶清單時只在清單內切換）
 func _switch_weapon(dir := 1) -> void:
 	var old_layer: String = wdef["layer"]
-	weapon = posmod(weapon + dir, WeaponDefs.count())
+	if weapon_set.size() > 0:
+		var k := weapon_set.find(weapon)
+		weapon = weapon_set[posmod(k + dir, weapon_set.size())]
+	else:
+		weapon = posmod(weapon + dir, WeaponDefs.count())
 	wdef = WeaponDefs.get_def(weapon)
 	draw_t = -1.0
 	_build_visual()
@@ -296,6 +340,7 @@ func take_damage(amount: float, from_pos = null, ranged := false) -> void:
 	var can_guard: bool = wdef["block"] == "shield" or (wdef["block"] == "weapon" and not ranged)
 	if blocking and can_guard and from_pos != null and facing.dot(-away) > cos(deg_to_rad(wdef["block_angle_deg"])):
 		hp -= amount * (1.0 - float(wdef["block_reduce"]))
+		dmg_taken += amount * (1.0 - float(wdef["block_reduce"]))
 		if not mounted:
 			_knock = away * 1.6
 		blocked.emit(global_position + Vector3(0, 2.0 if mounted else 1.1, 0) - away * 0.5)
@@ -303,6 +348,7 @@ func take_damage(amount: float, from_pos = null, ranged := false) -> void:
 			_die()
 		return
 	hp -= amount
+	dmg_taken += amount
 	hurt_t = hurt_time
 	# 被打中會中斷目前的動作（蓄力、揮出、收招都算）
 	if attack_phase != AttackPhase.NONE:
@@ -326,6 +372,7 @@ func _die() -> void:
 	if mounted and _mount_t < 0.0:
 		_dismount()          # 落馬
 	dead = true
+	deaths += 1
 	blocking = false
 	_respawn_timer = 4.0
 	attack_phase = AttackPhase.NONE
@@ -356,9 +403,10 @@ func _physics_process(delta: float) -> void:
 	_update_debug_sweeps(delta)
 	hurt_t = maxf(hurt_t - delta, 0.0)
 	if dead:
-		_respawn_timer -= delta
-		if _respawn_timer <= 0.0:
-			_respawn()
+		if respawn_enabled:
+			_respawn_timer -= delta
+			if _respawn_timer <= 0.0:
+				_respawn()
 		_store_pos()
 		return
 
@@ -654,7 +702,8 @@ func _sweep(prev_base: Vector3, prev_tip: Vector3, base: Vector3, tip: Vector3) 
 			dmg *= float(wdef["close_mult"])
 			stuck = wdef["stuck"]
 		var knock := to_target * (0.6 + closing * 0.12) * float(wdef["knockback"])
-		var killed: bool = battle.call("apply_damage", idx, dmg, knock)
+		var killed: bool = battle.call("apply_damage", idx, dmg, knock, BattleManager.Src.PLAYER)
+		dmg_dealt += dmg
 		if killed:
 			total_kills += 1
 		total += dmg
@@ -720,6 +769,7 @@ func _fire_arrow(power: float) -> void:
 	var spd := lerpf(float(wdef["arrow_speed_min"]), float(wdef["arrow_speed_max"]), power)
 	var dmg := lerpf(float(wdef["arrow_dmg_min"]), float(wdef["arrow_dmg_max"]), power)
 	swing_started.emit(mounted)
+	arrows_fired += 1
 	if battle != null:
 		battle.call("fire_player_arrow", origin, dir * spd, dmg, team)
 
@@ -731,6 +781,8 @@ func first_person() -> bool:
 
 ## BattleManager 回報玩家的箭射中士兵
 func on_arrow_hit(point: Vector3, dmg: float, killed: bool) -> void:
+	arrows_hit += 1
+	dmg_dealt += dmg
 	if killed:
 		total_kills += 1
 	hit_detail.emit(point, dmg, killed, 0.0)
