@@ -169,15 +169,12 @@ func _spawn_player_and_horse(at: Vector3) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if menus and menus.is_open():
 		if event.is_action_pressed("release_mouse"):
-			if menus._kind == "pause":
-				menus.close()
-			else:
-				menus.close()
+			menus.close()
 		return
 	if event.is_action_pressed("release_mouse"):
 		if stress_mode:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED else Input.MOUSE_MODE_CAPTURED
-		else:
+		elif _picker == null:
 			menus.toggle_pause()
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -334,7 +331,7 @@ func _show_side_picker() -> void:
 
 
 func _order(order: int, text: String) -> void:
-	if stress_mode or player == null:
+	if stress_mode or spectator or player == null:
 		return
 	# 命令只是寫入佇列；集結點 = 玩家目前位置，面向玩家朝向
 	battle.issue_order(player.team, order, player.global_position, player.facing)
@@ -459,7 +456,7 @@ var _center_timer := 0.0
 
 func _process(delta: float) -> void:
 	# 遮擋淡化：玩家（或騎乘中的馬上騎士）被樹、岩石擋住時，擋住的部分變成點陣半透明
-	if terrain and player and not stress_mode:
+	if terrain and player and not stress_mode and not spectator:
 		var vp: Vector3 = horse.visual_position() if player.mounted else player.visual_position()
 		terrain.set_occlusion_target(vp + Vector3(0, 1.9 if player.mounted else 1.0, 0))
 	# 觀戰中每半秒更新一次繞場中心，相機會平滑地跟著戰線移動
