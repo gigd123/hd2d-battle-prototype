@@ -128,6 +128,7 @@
 ### 第五輪：蓄力與弓箭命中回饋
 - 按住攻擊鍵時，蓄力動作做完會停在預備姿勢，放開才揮出；按一下就放開跟以前一樣直接揮出。傷害不變。
 - 弓箭命中：準心外圍閃一個 ✕（擊殺是紅色、比較大），下方顯示「命中 32」或「擊殺！ 45」，加一個遠處也聽得到的「叮」，命中點火花加大。放箭後瞄準視角多停 0.7 秒，看得到箭飛出去有沒有中。
+- 玩家移動加快約 12%：步行 5.0／奔跑 8.5 m/s，馬小跑 8.4／奔馳 16.8 m/s、倒退 2.9 m/s。動畫照走過的距離播放，腳步不會滑。
 
 ### 場地類型與高低起伏（`scripts/world/battle_terrain.gd`）
 五種場地，F8 依序切換、F9 隨機；也可用啟動參數 `--terrain=plains|hills|forest|river|snow|random`。預設是丘陵。
@@ -269,6 +270,8 @@ godot --path . -- --scenario=ride --shots=/tmp/shots --debug-draw
 godot --path . --write-movie demo.avi --fixed-fps 30 -- --scenario=demo --debug-draw
 # 五種場地輪流俯瞰（展示影片用）
 godot --path . --write-movie terrains.avi --fixed-fps 30 -- --terrain=plains --scenario=terrains
+# 野戰展示：五種場地輪流，每段換一類武器（騎槍、劍盾、弓、雙手斧、雙手錘、大劍）
+godot --path . --write-movie field.avi --fixed-fps 30 -- --scenario=field_video
 # 玩家不操作，每 10 秒印出戰況，直到分出勝負
 godot --headless --path . --fixed-fps 60 -- --scenario=battle
 ```

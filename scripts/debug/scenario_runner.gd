@@ -82,6 +82,15 @@ func setup(scenario: String) -> void:
 			for k in 15:
 				steps.append([50.3 + k * 0.6, "tap", "attack"])
 			steps.append_array([[59.5, "report", ""], [60.0, "quit", ""]])
+		"field_video":
+			# 野戰展示影片：五種場地輪流，每段換一類武器（騎槍、單手劍盾、弓、雙手斧、雙手錘、大劍）
+			_field_seg(0.0, "plains", 1, "騎馬持長槍衝鋒", "mounted")
+			_field_seg(13.0, "forest", 0, "單手劍＋盾：出手快、一次最多砍 3 人，右鍵舉盾", "sword")
+			_field_seg(26.0, "hills", 11, "弓：按住拉弓、放開射出；先第三人稱肩後瞄準，再切第一人稱", "bow")
+			_field_seg(42.0, "river", 6, "雙手長柄斧：攻擊距離長、傷害高", "melee")
+			_field_seg(55.0, "snow", 9, "雙手短柄錘：重擊、擊退強", "melee")
+			_field_seg(68.0, "plains", 2, "大劍：範圍大、傷害高、沒有盾，只能用劍格擋", "great")
+			steps.append([81.0, "quit", ""])
 		"battle":
 			# 玩家完全不操作，觀察戰鬥能否自行分出勝負（每 10 秒印一次戰況）
 			for k in range(1, 25):
@@ -167,10 +176,139 @@ func setup(scenario: String) -> void:
 			steps.append([keys.size() * 7.0, "quit", ""])
 		_:
 			steps = [[0.5, "quit", ""]]
+	# 依時間排序（同一時間的步驟保持原本順序）
+	for k in steps.size():
+		steps[k].append(k)
+	steps.sort_custom(func(a, b): return a[0] < b[0] or (a[0] == b[0] and a[3] < b[3]))
+
+
+var _aimbot := false
+var _aim_target := -1
+var _aim_mode := ""
+var _auto_atk := true
+var _hits := 0
+
+
+func _on_hit(_n, _dmg) -> void:
+	_hits += 1
+
+
+func _field_seg(t0: float, terrain: String, weapon_idx: int, caption: String, style: String) -> void:
+	var ter_i := BattleTerrain.type_from_key(terrain)
+	var add := func(dt: float, a: String, arg: String = ""): steps.append([t0 + dt, a, arg])
+	add.call(-0.05, "report", "")
+	add.call(0.0, "terrain", terrain)
+	add.call(0.15, "overview", "38")
+	add.call(0.2, "weapon", str(weapon_idx))
+	if style == "bow":
+		add.call(0.25, "charge_team", "1")
+	else:
+		add.call(0.25, "charge", "")
+	if style == "mounted":
+		add.call(0.4, "tap", "interact")
+	add.call(2.8, "playercam", "-1.5708,6.5,14")
+	add.call(2.8, "hud_show", "")
+	add.call(2.85, "caption", "%s・%s" % [BattleTerrain.TYPE_NAMES[ter_i], caption])
+	match style:
+		"mounted":
+			add.call(3.0, "aimbot", "ride")
+			add.call(3.0, "hold", "move_forward")
+			add.call(3.6, "hold", "sprint")
+			var k := 0
+			while 5.0 + k * 0.66 < 12.4:
+				add.call(5.0 + k * 0.66, "tap", "attack")
+				k += 1
+			add.call(12.8, "release", "move_forward")
+			add.call(12.8, "release", "sprint")
+			add.call(12.85, "aimbot", "off")
+		"bow":
+			add.call(2.8, "teleport", "-10,2")
+			add.call(3.0, "aimbot", "on")
+			var tt := 3.4
+			var n := 0
+			while tt < 15.0:
+				if n == 4:
+					add.call(tt - 0.2, "tap", "aim_view")
+					add.call(tt - 0.15, "caption", "切換第一人稱瞄準（F 鍵）")
+				add.call(tt, "hold", "attack")
+				add.call(tt + 0.95, "release", "attack")
+				tt += 1.45
+				n += 1
+			add.call(15.9, "aimbot", "off")
+		_:
+			# 近戰輔助：自動走向最近的敵人，進入攻擊距離才出手
+			add.call(2.8, "teleport", "-12,0")
+			add.call(3.6, "aimbot", "melee")
+			add.call(12.9, "aimbot", "off")
+			if style == "great":
+				add.call(8.0, "autoatk", "off")
+				add.call(8.1, "caption", "按住攻擊鍵會停在預備姿勢，放開才揮出（傷害不會變高）")
+				add.call(8.3, "hold", "attack")
+				add.call(9.6, "release", "attack")
+				add.call(10.2, "autoatk", "on")
+			elif style == "sword":
+				add.call(9.0, "autoatk", "off")
+				add.call(9.1, "hold", "block")
+				add.call(10.3, "release", "block")
+				add.call(10.4, "autoatk", "on")
+
+
+func _update_aimbot() -> void:
+	var bf := get_tree().current_scene
+	var bm: BattleManager = bf.get("battle")
+	var rig: OrbitFollowCamera = bf.get("cam_rig")
+	var pl: PlayerController = bf.get("player")
+	if bm == null or rig == null or pl == null:
+		return
+	var pp := pl.global_position
+	var bow := _aim_mode == "on"
+	var dmin := 9.0 if bow else (7.0 if _aim_mode == "ride" else 0.0)
+	var lost := _aim_target < 0 or _aim_target >= bm.count or bm.state[_aim_target] == BattleManager.State.DEAD
+	if not lost and bm.pos[_aim_target].distance_to(pp) < dmin and _aim_mode != "melee":
+		lost = true
+	if lost or (_aim_mode == "melee" and Engine.get_physics_frames() % 20 == 0):
+		_aim_target = -1
+		var best := 1e9
+		for j in bm.count:
+			if bm.team[j] != 1 or bm.state[j] == BattleManager.State.DEAD:
+				continue
+			var d := bm.pos[j].distance_to(pp)
+			if _aim_mode == "melee" and bm.state[j] != BattleManager.State.ENGAGE:
+				d += 6.0
+			if d > dmin and d < 40.0 and d < best:
+				best = d
+				_aim_target = j
+	if _aim_target < 0:
+		if _aim_mode == "melee":
+			Input.action_release("move_forward")
+		return
+	if not bow:
+		var tf := bm.pos[_aim_target] - pp
+		var fy := atan2(-tf.x, -tf.z)
+		rig.yaw = lerp_angle(rig.yaw, fy, 0.08 if _aim_mode == "ride" else 0.15)
+		if _aim_mode == "melee":
+			var fd := Vector2(tf.x, tf.z).length()
+			if fd > pl.reach() * 0.9:
+				Input.action_press("move_forward")
+			else:
+				Input.action_release("move_forward")
+			if _auto_atk and fd < pl.reach() + 0.5 and pl.attack_phase == 0 and Engine.get_physics_frames() % 6 == 0:
+				_run([0.0, "tap", "attack"])
+		return
+	var cam: Camera3D = rig.camera
+	var tgt := bm.pos[_aim_target] + Vector3(0, 1.25, 0)
+	var to := tgt - cam.global_position
+	var want_yaw := atan2(-to.x, -to.z)
+	var want_pitch := clampf(-rad_to_deg(atan2(to.y, Vector2(to.x, to.z).length())), -60.0, 88.0)
+	rig.yaw = lerp_angle(rig.yaw, want_yaw, 0.25)
+	rig.pitch_deg = lerpf(rig.pitch_deg, want_pitch, 0.25)
 
 
 func _physics_process(delta: float) -> void:
 	_t += delta
+	if _aimbot:
+		_update_aimbot()
+
 	if _follow_cam:
 		# 相機慢慢轉到玩家（或馬）背後
 		var bf := get_tree().current_scene
@@ -300,7 +438,34 @@ func _run(step: Array) -> void:
 			get_tree().reload_current_scene()
 		"pos":
 			var ppl: PlayerController = get_tree().current_scene.get("player")
-			print("[scenario] player pos ", ppl.global_position)
+			var pbm: BattleManager = get_tree().current_scene.get("battle")
+			var nd := 1e9
+			for j in pbm.count:
+				if pbm.team[j] == 1 and pbm.state[j] != BattleManager.State.DEAD:
+					nd = minf(nd, pbm.pos[j].distance_to(ppl.global_position))
+			print("[scenario] t=%.1f player pos %s nearest enemy %.1f tgt %d phase %d" % [_t, ppl.global_position, nd, _aim_target, ppl.attack_phase])
+		"weapon":
+			var wpl: PlayerController = get_tree().current_scene.get("player")
+			wpl.call("_switch_weapon", int(arg) - wpl.weapon)
+		"charge_team":
+			var cbm: BattleManager = get_tree().current_scene.get("battle")
+			cbm.issue_order(int(arg), BattleManager.Order.CHARGE, Vector3.ZERO, Vector3.ZERO)
+		"hud_show":
+			var shud: BattleHUD = get_tree().current_scene.get("hud")
+			(shud.get("_info") as Label).visible = true
+		"aimbot":
+			_aimbot = arg != "off"
+			_aim_mode = arg
+			_aim_target = -1
+			if arg == "off":
+				Input.action_release("move_forward")
+			var apl: PlayerController = get_tree().current_scene.get("player")
+			if arg != "off" and not apl.hit_landed.is_connected(_on_hit):
+				apl.hit_landed.connect(_on_hit)
+		"autoatk":
+			_auto_atk = arg == "on"
+		"nofollowcam":
+			_follow_cam = false
 		"followcam":
 			_follow_cam = true
 		"cam":
@@ -318,6 +483,8 @@ func _run(step: Array) -> void:
 			var pl: Node = bf.get("player")
 			if bm.get("siege") != null:
 				print("   ", bm.call("siege_debug"))
+			print("[scenario] hits=%d" % _hits)
+			_hits = 0
 			print("[scenario] t=%.0f  玩家擊殺 %d 生命 %d  %s" % [_t, pl.get("total_kills"), pl.get("hp"), bm.call("stats_text").replace("\n", " | ")])
 			if int(bm.get("winner")) != -1:
 				get_tree().quit()
