@@ -1676,17 +1676,3 @@ func _ladder_top_blocked(i: int, p: Vector3) -> bool:
 				return true
 	return false
 
-
-func siege_debug_detail() -> String:
-	var out := ""
-	var hist := {}
-	for i in count:
-		if state[i] == State.DEAD:
-			continue
-		var key := "t%d %s z%d lv%d ord%d role%d tg%s" % [team[i], U_NAMES[utype[i]], siege.zone_of(lvl[i], pos[i].x), lvl[i], squad_order[squad[i]], squad_role[squad[i]], "Y" if target[i] != NO_TARGET else "N"]
-		hist[key] = int(hist.get(key, 0)) + 1
-		if team[i] == defender_team():
-			out += "  D %s pos(%.1f,%.1f,%.1f)\n" % [key, pos[i].x, pos[i].y, pos[i].z]
-	for k in hist:
-		out += "%s: %d\n" % [k, hist[k]]
-	return out

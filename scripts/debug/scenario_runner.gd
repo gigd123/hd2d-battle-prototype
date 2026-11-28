@@ -54,6 +54,34 @@ func setup(scenario: String) -> void:
 				[71.0, "report", ""],
 				[71.5, "quit", ""],
 			]
+		"ladder_test":
+			steps = [
+				[0.2, "teleport", "1,-14"], [0.3, "yaw", "-1.5708"], [0.5, "hold", "move_forward"],
+				[1.5, "pos", ""], [2.5, "pos", ""], [3.5, "pos", ""], [4.5, "pos", ""], [4.6, "release", "move_forward"], [5.5, "pos", ""], [5.6, "quit", ""],
+			]
+		"siege_video":
+			# 攻城戰展示影片：前半玩家當守城方（牆頂守雲梯），後半當攻城方（跟著大軍爬梯上牆）
+			# 用 --siege=defend 啟動
+			steps = [
+				[0.0, "overview_at", "6,-8,40,-2.0"], [0.05, "caption", "攻城戰・守城方（200 人）：城牆、城門、三道雲梯"],
+				[0.1, "teleport_wall", "-12.2"],
+				[7.0, "playercam", "1.5708,7,24"], [7.1, "caption", "玩家守在第二道雲梯的梯頂"],
+			]
+			for k in 32:
+				steps.append([13.0 + k * 0.6, "tap", "attack"])
+			steps.append_array([
+				[33.0, "siege_side", "attack"],
+				[33.2, "overview_at", "-14,-4,38,-0.9"], [33.25, "caption", "攻城戰・攻城方（400 人）：攻城槌推向城門，步兵分三路爬梯"],
+				[33.3, "teleport", "-21,-14.6"],
+				[39.0, "playercam", "-1.5708,6.5,20"], [39.1, "caption", "玩家跟著步兵衝向雲梯"],
+				[39.2, "hold", "move_forward"], [39.2, "hold", "sprint"],
+				[42.6, "release", "sprint"],
+				[43.5, "caption", "雲梯很陡，爬上去約 6 秒；梯頂有敵人就得先打下來"],
+				[50.0, "release", "move_forward"],
+			])
+			for k in 15:
+				steps.append([50.3 + k * 0.6, "tap", "attack"])
+			steps.append_array([[59.5, "report", ""], [60.0, "quit", ""]])
 		"battle":
 			# 玩家完全不操作，觀察戰鬥能否自行分出勝負（每 10 秒印一次戰況）
 			for k in range(1, 25):
@@ -236,6 +264,43 @@ func _run(step: Array) -> void:
 			var bm: BattleManager = get_tree().current_scene.get("battle")
 			bm.issue_order(0, BattleManager.Order.CHARGE, Vector3.ZERO, Vector3.ZERO)
 			bm.issue_order(1, BattleManager.Order.CHARGE, Vector3.ZERO, Vector3.ZERO)
+		"teleport", "teleport_wall":
+			# 參數：x,z（teleport）或 z（teleport_wall：站到牆頂走道）
+			var tbf := get_tree().current_scene
+			var tpl: PlayerController = tbf.get("player")
+			var tsg = tbf.get("siege_map")
+			var tv := arg.split(",")
+			var np := Vector3.ZERO
+			if action == "teleport_wall":
+				np = Vector3(SiegeMap.WALK_X0 + 1.0, tsg.wall_top() + 0.1, float(tv[0]))
+			else:
+				var ter2: BattleTerrain = tbf.get("terrain")
+				np = Vector3(float(tv[0]), 0, float(tv[1]))
+				np.y = ter2.get_height(np.x, np.z) + 0.1
+			tpl.global_position = np
+			tpl.spawn_point = np
+			tpl.velocity = Vector3.ZERO
+		"yaw":
+			var yrig: OrbitFollowCamera = get_tree().current_scene.get("cam_rig")
+			yrig.yaw = float(arg)
+		"playercam":
+			# 回到玩家相機。參數：yaw, 距離, 俯角
+			var prig: OrbitFollowCamera = get_tree().current_scene.get("cam_rig")
+			var pv := arg.split(",")
+			prig.auto_orbit = false
+			prig.yaw = float(pv[0])
+			prig.distance = float(pv[1])
+			prig.pitch_deg = float(pv[2])
+		"caption":
+			var chud: BattleHUD = get_tree().current_scene.get("hud")
+			chud.toast(arg, 5.5)
+		"siege_side":
+			GameConfig.siege_mode = true
+			GameConfig.siege_side = 1 if arg == "defend" else 0
+			get_tree().reload_current_scene()
+		"pos":
+			var ppl: PlayerController = get_tree().current_scene.get("player")
+			print("[scenario] player pos ", ppl.global_position)
 		"followcam":
 			_follow_cam = true
 		"cam":
@@ -253,8 +318,6 @@ func _run(step: Array) -> void:
 			var pl: Node = bf.get("player")
 			if bm.get("siege") != null:
 				print("   ", bm.call("siege_debug"))
-				if _t > 295.0 and _t < 305.0:
-					print(bm.call("siege_debug_detail"))
 			print("[scenario] t=%.0f  玩家擊殺 %d 生命 %d  %s" % [_t, pl.get("total_kills"), pl.get("hp"), bm.call("stats_text").replace("\n", " | ")])
 			if int(bm.get("winner")) != -1:
 				get_tree().quit()
