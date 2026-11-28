@@ -210,12 +210,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			restart_battle()
 			hud.toast("重開戰局")
-	elif event.is_action_pressed("order_charge"):
-		_order(BattleManager.Order.CHARGE, "全軍衝鋒！")
-	elif event.is_action_pressed("order_hold"):
-		_order(BattleManager.Order.HOLD, "在此集結！")
-	elif event.is_action_pressed("order_follow"):
-		_order(BattleManager.Order.FOLLOW, "跟隨我！")
+	elif _command_input(event):
+		pass
 	elif event.is_action_pressed("toggle_billboard"):
 		GameConfig.full_billboard = not GameConfig.full_billboard
 		hud.toast("Billboard：" + ("完全面向相機" if GameConfig.full_billboard else "Y 軸直立"))
@@ -330,12 +326,158 @@ func _show_side_picker() -> void:
 	get_tree().paused = true
 
 
-func _order(order: int, text: String) -> void:
-	if stress_mode or spectator or player == null:
+# ---------------------------------------------------------------------------
+# 部隊指揮（命令只寫入戰場管理器的佇列，下一個物理步才生效）
+# ---------------------------------------------------------------------------
+const SEL_KEYS := {
+	"select_all": BattleManager.MASK_ALL, "select_inf": BattleManager.MASK_INF,
+	"select_arc": BattleManager.MASK_ARC, "select_cav": BattleManager.MASK_CAV,
+}
+const FORM_KEYS := {
+	"form_line": BattleManager.Form.LINE, "form_tight": BattleManager.Form.TIGHT,
+	"form_loose": BattleManager.Form.LOOSE, "form_wedge": BattleManager.Form.WEDGE,
+}
+const ADVANCE_STEP := 15.0
+## 目前選取的兵種（BattleManager.MASK_*）
+var sel_mask: int = BattleManager.MASK_ALL
+var _marker: MeshInstance3D
+var _marker_t := 0.0
+
+
+func can_command() -> bool:
+	return not stress_mode and not spectator and player != null and not player.dead and battle != null
+
+
+## 處理指揮按鍵；有處理就回傳 true
+func _command_input(event: InputEvent) -> bool:
+	if not event.is_pressed() or event.is_echo():
+		return false
+	for a in SEL_KEYS:
+		if event.is_action_pressed(a):
+			if not can_command():
+				return true
+			var m: int = SEL_KEYS[a]
+			if Input.is_key_pressed(KEY_SHIFT) and m != BattleManager.MASK_ALL and sel_mask != BattleManager.MASK_ALL:
+				sel_mask |= m
+			else:
+				sel_mask = m
+			hud.toast("選取：" + sel_name())
+			return true
+	for a in FORM_KEYS:
+		if event.is_action_pressed(a):
+			if can_command():
+				battle.issue_formation(player.team, FORM_KEYS[a], sel_mask)
+				hud.toast("%s：%s陣型" % [sel_name(), BattleManager.FORM_NAMES[FORM_KEYS[a]]])
+			return true
+	if event.is_action_pressed("toggle_keep"):
+		if can_command():
+			var on := not battle.keep_on(player.team, sel_mask)
+			battle.issue_keep(player.team, on, sel_mask)
+			hud.toast("%s：%s" % [sel_name(), "保持陣型（只打身邊的敵人）" if on else "自由接戰"])
+		return true
+	var t := player.team if player else 0
+	if event.is_action_pressed("order_charge"):
+		_order(BattleManager.Order.CHARGE, "衝鋒！")
+	elif event.is_action_pressed("order_hold"):
+		_order(BattleManager.Order.HOLD, "在此集結！", player.global_position if player else Vector3.ZERO)
+	elif event.is_action_pressed("order_follow"):
+		_order(BattleManager.Order.FOLLOW, "跟隨我！")
+	elif event.is_action_pressed("order_move"):
+		if can_command():
+			var at := aim_point()
+			_order(BattleManager.Order.MOVE, "移動到那裡！", at, _flat(at - player.global_position))
+			_show_marker(at, Color(0.4, 0.8, 1.0))
+	elif event.is_action_pressed("order_advance"):
+		if can_command():
+			var back := Input.is_key_pressed(KEY_SHIFT)
+			battle.issue_advance(t, -ADVANCE_STEP if back else ADVANCE_STEP, Vector3.ZERO, sel_mask)
+			hud.toast("%s：%s %d 公尺" % [sel_name(), "後退" if back else "前進", int(ADVANCE_STEP)])
+	elif event.is_action_pressed("order_attack"):
+		if can_command():
+			var at := aim_point()
+			var s := battle.nearest_enemy_squad(t, at, 25.0)
+			if s < 0:
+				hud.toast("準心附近沒有敵軍")
+			else:
+				battle.issue_order(t, BattleManager.Order.ATTACK, at, Vector3.ZERO, sel_mask, s)
+				hud.toast("%s：攻擊那隊敵軍！" % sel_name())
+				_show_marker(battle.squad_center[s], Color(1.0, 0.35, 0.25))
+	else:
+		return false
+	return true
+
+
+func _order(order: int, text: String, at := Vector3.ZERO, fwd := Vector3.ZERO) -> void:
+	if not can_command():
 		return
-	# 命令只是寫入佇列；集結點 = 玩家目前位置，面向玩家朝向
-	battle.issue_order(player.team, order, player.global_position, player.facing)
-	hud.toast(text)
+	if fwd.length() < 0.1:
+		fwd = player.facing
+	battle.issue_order(player.team, order, at, fwd, sel_mask)
+	hud.toast("%s：%s" % [sel_name(), text])
+	if order == BattleManager.Order.HOLD:
+		_show_marker(at, Color(0.5, 1.0, 0.5))
+
+
+func sel_name() -> String:
+	if sel_mask == BattleManager.MASK_ALL:
+		return "全軍"
+	var parts: Array[String] = []
+	if sel_mask & BattleManager.MASK_INF:
+		parts.append("步兵")
+	if sel_mask & BattleManager.MASK_ARC:
+		parts.append("弓兵")
+	if sel_mask & BattleManager.MASK_CAV:
+		parts.append("騎兵")
+	return "＋".join(parts)
+
+
+static func _flat(v: Vector3) -> Vector3:
+	v.y = 0.0
+	return v.normalized() if v.length() > 0.1 else Vector3.ZERO
+
+
+## 畫面中央（準心）指到的地面點：沿相機視線往前步進，碰到地形高度就停；最遠 160 公尺
+func aim_point() -> Vector3:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return player.global_position
+	var vp := get_viewport().get_visible_rect().size
+	var from := cam.project_ray_origin(vp * 0.5)
+	var dir := cam.project_ray_normal(vp * 0.5)
+	var p := from
+	var step := 1.0
+	var d := 0.0
+	while d < 160.0:
+		var q := p + dir * step
+		if q.y <= terrain.get_height(q.x, q.z):
+			p = q
+			break
+		p = q
+		d += step
+	p = terrain.clamp_to_map(p, 6.0)
+	p.y = terrain.get_height(p.x, p.z)
+	return p
+
+
+## 目標點標記：一個貼地的圓環，幾秒後淡出
+func _show_marker(at: Vector3, col: Color) -> void:
+	if _marker == null:
+		_marker = MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 1.6
+		tm.outer_radius = 2.0
+		tm.rings = 32
+		_marker.mesh = tm
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.no_depth_test = true
+		_marker.material_override = mat
+		add_child(_marker)
+	(_marker.material_override as StandardMaterial3D).albedo_color = col
+	_marker.global_position = Vector3(at.x, terrain.get_height(at.x, at.z) + 0.15, at.z)
+	_marker.visible = true
+	_marker_t = 3.0
 
 
 func _on_hit_landed(hits: int, dmg: float) -> void:
@@ -455,6 +597,16 @@ var _center_timer := 0.0
 
 
 func _process(delta: float) -> void:
+	if _marker and _marker.visible:
+		_marker_t -= delta
+		_marker.visible = _marker_t > 0.0
+		var c := (_marker.material_override as StandardMaterial3D).albedo_color
+		c.a = clampf(_marker_t, 0.0, 1.0) * 0.85
+		(_marker.material_override as StandardMaterial3D).albedo_color = c
+	if hud and can_command():
+		hud.command_text = "指揮（%s）\n%s" % [sel_name(), battle.command_status(player.team, sel_mask)]
+	elif hud:
+		hud.command_text = ""
 	# 遮擋淡化：玩家（或騎乘中的馬上騎士）被樹、岩石擋住時，擋住的部分變成點陣半透明
 	if terrain and player and not stress_mode and not spectator:
 		var vp: Vector3 = horse.visual_position() if player.mounted else player.visual_position()

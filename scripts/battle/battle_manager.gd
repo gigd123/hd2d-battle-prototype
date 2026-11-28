@@ -21,7 +21,18 @@ signal cavalry_impact(point: Vector3, speed: float)            # 騎兵衝撞敵
 signal siege_event(text: String)                               # 攻城戰的戰況提示（城門被攻破等）
 
 enum State { IDLE, MOVE, ENGAGE, DEAD }
-enum Order { HOLD, FOLLOW, CHARGE }
+enum Order { HOLD, FOLLOW, CHARGE, MOVE, ATTACK }
+## 小隊陣型：橫隊（預設）、緊密（盾牆）、鬆散（減少箭傷集中）、楔形（騎兵衝鋒）
+enum Form { LINE, TIGHT, LOOSE, WEDGE }
+const FORM_NAMES := ["橫隊", "緊密", "鬆散", "楔形"]
+## 指令要給哪些兵種（位元遮罩）：劍盾兵算步兵
+const MASK_INF := 1 | 8
+const MASK_ARC := 2
+const MASK_CAV := 4
+const MASK_ALL := 15
+const ADVANCE_STOP := 52.0           # 電腦推進到雙方相距約這麼遠（剛好在弓兵射程外一點）
+const MARCH_SPEED := 2.6        # 列隊行進時集結點的移動速度（m/s，比步兵走路慢一點，隊伍跟得上）
+const LEASH := 3.5              # 保持陣型時，離開自己槽位超過這個距離就回位
 ## 兵種（與 PlaceholderArt.Unit 相同順序）
 enum UnitType { INFANTRY, ARCHER, CAVALRY, SWORDSMAN }
 
@@ -144,6 +155,17 @@ var squad_zone := PackedByteArray()     # 攻城戰：小隊集結點所在區�
 var squad_role := PackedByteArray()     # 攻城戰：小隊任務（Role）
 var squad_ladder := PackedInt32Array()  # 攻城戰：攻方小隊指定的雲梯（-1 = 自己挑）
 var squad_lo := PackedByteArray()       # 小隊的武器配置
+var squad_form := PackedByteArray()     # 陣型（Form）
+var squad_keep := PackedByteArray()     # 1 = 保持陣型：只打槽位附近的敵人，打完回位
+var squad_off := PackedVector2Array()   # 群組排列中的位置（x = 往右、y = 往後，公尺），跟隨與移動時沿用
+var squad_goal := PackedVector3Array()  # MOVE：集結點最後要到的位置
+var squad_tsq := PackedInt32Array()     # ATTACK：目標敵方小隊
+var squad_center := PackedVector3Array() # 每步重算：活著隊員的平均位置
+var squad_spread := PackedFloat32Array() # 每步重算：隊員離中心最遠的距離
+var _sq_head := PackedInt32Array()      # 每步重算：小隊成員串列（活著的）
+var _sq_next := PackedInt32Array()
+var _player_att_n := 0                  # 每步重算：正在打玩家的士兵數
+var _ai_phase := [0, 0]                 # 電腦指揮官：0 待命、1 列隊推進中、2 已衝鋒
 
 # 武器配置表展開成陣列（每步迴圈裡查表比查 Dictionary 快）
 var _l_reach := PackedFloat32Array()
@@ -186,7 +208,6 @@ var rear_x := [-30.0, 30.0]
 var alive_count := PackedInt32Array([0, 0])
 var kills := PackedInt32Array([0, 0])
 var command_queue: Array[Dictionary] = []
-var enemy_ai_charge_at := 10.0          # 敵方指揮官：開戰後幾秒全軍衝鋒
 var auto_charge_both := false           # 壓力測試：雙方都直接衝鋒
 var immortal := false                   # 壓力測試選項：不死亡，維持固定負載
 var battle_time := 0.0
@@ -328,8 +349,15 @@ func spawn_armies(per_team: int, center := Vector3.ZERO, gap := 36.0) -> void:
 			remaining -= members
 			for m in members:
 				_add_soldier(t, sq, m)
+	_init_offsets()
 	if renderer:
 		renderer.setup(self)
+
+
+## 開局先算好群組排列位移（「跟隨我」要用）
+func _init_offsets() -> void:
+	for t in 2:
+		_arrange(_select(t, MASK_ALL))
 
 
 ## 依戰鬥設定生成雙方部隊（初始選單用）。每一列編成依 squad_size 切成小隊：
@@ -394,6 +422,7 @@ func spawn_from_setup(st: BattleSetup) -> void:
 				for m in int(list[k][1]):
 					_add_soldier(t, sq, m)
 		rear_x[t] = clampf(sign_x * (deploy_gap * 0.5 + max_depth + 9.0), -lim, lim)
+	_init_offsets()
 	if renderer:
 		renderer.setup(self)
 
@@ -448,6 +477,14 @@ func _clear() -> void:
 	lvl = PackedByteArray()
 	lo = PackedByteArray()
 	squad_lo = PackedByteArray()
+	squad_form = PackedByteArray()
+	squad_keep = PackedByteArray()
+	squad_off = PackedVector2Array()
+	squad_goal = PackedVector3Array()
+	squad_tsq = PackedInt32Array()
+	squad_center = PackedVector3Array()
+	squad_spread = PackedFloat32Array()
+	_ai_phase = [0, 0]
 	stat_start = PackedInt32Array(); stat_start.resize(8)
 	stat_dead = PackedInt32Array(); stat_dead.resize(8)
 	stat_kill_src = PackedInt32Array(); stat_kill_src.resize(8)
@@ -480,6 +517,13 @@ func _add_squad(t: int, anchor: Vector3, fwd: Vector3, ut: int = UnitType.INFANT
 	if loadout < 0:
 		loadout = UnitDefs.siege_default_for(ut) if siege != null else UnitDefs.default_for(ut)
 	squad_lo.append(loadout)
+	squad_form.append(Form.LINE)
+	squad_keep.append(0)
+	squad_off.append(Vector2.ZERO)
+	squad_goal.append(anchor)
+	squad_tsq.append(-1)
+	squad_center.append(anchor)
+	squad_spread.append(0.0)
 	squad_order.append(Order.CHARGE if auto_charge_both else Order.HOLD)
 	squad_anchor.append(anchor)
 	squad_facing.append(fwd)
@@ -529,23 +573,69 @@ func _add_soldier(t: int, sq: int, k: int) -> void:
 	count += 1
 
 
-## 小隊隊形槽位：5 人一列，列距 1.4 公尺。
+## 小隊隊形槽位（依陣型）：橫隊 5 人一列；緊密縮小間距；鬆散加大間距；楔形 1-2-3-4 人的三角形，尖端朝前。
 func slot_position(sq: int, k: int) -> Vector3:
 	if siege != null and squad_role[sq] == Role.RAM and not siege.gate_broken:
 		return siege.ram_slot(k + maxi(squad_ladder[sq], 0))
 	var f := squad_facing[sq]
 	var right := Vector3(-f.z, 0, f.x)
-	var file := k % 5
-	var rank := k / 5
 	var sp: float = U_SPACING[squad_type[sq]]
-	return squad_anchor[sq] + right * ((file - 2) * sp) - f * (rank * sp)
+	var lat := 0.0
+	var back := 0.0
+	match squad_form[sq]:
+		Form.WEDGE:
+			var row := int(floor((sqrt(8.0 * k + 1.0) - 1.0) * 0.5))
+			var idx := k - row * (row + 1) / 2
+			lat = (idx - row * 0.5) * sp * 1.15
+			back = row * sp
+		_:
+			var m := 0.72 if squad_form[sq] == Form.TIGHT else (1.9 if squad_form[sq] == Form.LOOSE else 1.0)
+			lat = ((k % 5) - 2) * sp * m
+			back = (k / 5) * sp * m
+	return squad_anchor[sq] + right * lat - f * back
+
+
+## 小隊在群組排列中佔的寬度、深度（公尺）
+func _squad_size(s: int) -> Vector2:
+	var sp: float = U_SPACING[squad_type[s]]
+	match squad_form[s]:
+		Form.TIGHT:
+			return Vector2(4.0 * sp * 0.72, 1.0 * sp * 0.72)
+		Form.LOOSE:
+			return Vector2(4.0 * sp * 1.9, 1.0 * sp * 1.9)
+		Form.WEDGE:
+			return Vector2(3.0 * sp * 1.15, 3.0 * sp)
+	return Vector2(4.0 * sp, sp)
+
+
+static func _type_bit(ut: int) -> int:
+	return 1 << ut
 
 
 # ---------------------------------------------------------------------------
-# 命令（玩家輸入只寫入佇列）
+# 命令（玩家輸入只寫入佇列，下一個物理步由小隊層取用）
 # ---------------------------------------------------------------------------
-func issue_order(t: int, order: int, at: Vector3, fwd: Vector3) -> void:
-	command_queue.append({"team": t, "order": order, "pos": at, "fwd": fwd})
+## order：Order；mask：哪些兵種（MASK_*）；at／fwd：集結點與面向（HOLD、MOVE）
+func issue_order(t: int, order: int, at: Vector3, fwd: Vector3, mask := MASK_ALL, target_sq := -1) -> void:
+	command_queue.append({"team": t, "kind": "order", "order": order, "pos": at, "fwd": fwd, "mask": mask, "tsq": target_sq})
+
+
+## 前進（dist > 0）或後退（dist < 0）：每個小隊從目前位置沿面向移動，列隊行進
+func issue_advance(t: int, dist: float, fwd: Vector3, mask := MASK_ALL) -> void:
+	command_queue.append({"team": t, "kind": "advance", "dist": dist, "fwd": fwd, "mask": mask})
+
+
+## 行進中的小隊就地停下（改成守位）
+func issue_halt(t: int, mask := MASK_ALL) -> void:
+	command_queue.append({"team": t, "kind": "halt", "mask": mask})
+
+
+func issue_formation(t: int, form: int, mask := MASK_ALL) -> void:
+	command_queue.append({"team": t, "kind": "form", "form": form, "mask": mask})
+
+
+func issue_keep(t: int, keep: bool, mask := MASK_ALL) -> void:
+	command_queue.append({"team": t, "kind": "keep", "keep": keep, "mask": mask})
 
 
 func order_name(o: int) -> String:
@@ -554,8 +644,228 @@ func order_name(o: int) -> String:
 			return "守位"
 		Order.FOLLOW:
 			return "跟隨"
+		Order.MOVE:
+			return "行進"
+		Order.ATTACK:
+			return "攻擊目標"
 		_:
 			return "衝鋒"
+
+
+## 離 p 最近的敵方小隊（以隊員中心算，扣掉散開範圍），超過 max_d 公尺回傳 -1。「攻擊指定敵隊」用
+func nearest_enemy_squad(t: int, p: Vector3, max_d := 25.0) -> int:
+	var best := -1
+	var best_d := max_d
+	for s in squad_count:
+		if squad_team[s] == t or squad_alive[s] <= 0:
+			continue
+		var d := maxf(Vector2(squad_center[s].x - p.x, squad_center[s].z - p.z).length() - squad_spread[s], 0.0)
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
+
+
+## 選取的小隊裡有沒有正在「保持陣型」的
+func keep_on(t: int, mask: int) -> bool:
+	for s in _select(t, mask):
+		if squad_keep[s] == 1:
+			return true
+	return false
+
+
+## HUD 用：每個兵種一行「兵種（幾隊・幾人）命令・陣型」，被選取的前面加 ▶
+func command_status(t: int, mask: int) -> String:
+	var names := ["步兵", "弓兵", "騎兵"]
+	var bits := [MASK_INF, MASK_ARC, MASK_CAV]
+	var lines: Array[String] = []
+	for k in 3:
+		var sel := _select(t, bits[k])
+		if sel.is_empty():
+			continue
+		var men := 0
+		var orders := {}
+		var forms := {}
+		var keep := false
+		for s in sel:
+			men += squad_alive[s]
+			orders[order_name(squad_order[s])] = true
+			forms[FORM_NAMES[squad_form[s]]] = true
+			keep = keep or squad_keep[s] == 1
+		lines.append("%s%s %d 隊 %d 人　%s・%s%s" % ["▶ " if (mask & bits[k]) != 0 else "　 ", names[k], sel.size(), men,
+			"／".join(orders.keys()), "／".join(forms.keys()), "・保持陣型" if keep else ""])
+	return "\n".join(lines)
+
+
+## 陣營 t 中符合兵種遮罩、還活著的小隊
+func _select(t: int, mask: int) -> Array[int]:
+	var out: Array[int] = []
+	for s in squad_count:
+		if squad_team[s] == t and squad_alive[s] > 0 and (mask & _type_bit(squad_type[s])) != 0:
+			out.append(s)
+	return out
+
+
+## 群組排列：步兵在前（最多 6 隊一排）、弓兵在步兵後、騎兵在兩翼；只有一種兵種時就排成一橫列。
+## 結果寫進 squad_off（往右、往後的位移），中心是 (0, 0)。
+func _arrange(sel: Array[int]) -> void:
+	var groups := [[], [], []]
+	for s in sel:
+		var ut := squad_type[s]
+		groups[0 if (ut == UnitType.INFANTRY or ut == UnitType.SWORDSMAN) else ut].append(s)
+	var front: Array = groups[0] if not groups[0].is_empty() else groups[1]
+	var back: Array = groups[1] if not groups[0].is_empty() else []
+	var wings: Array = groups[2]
+	if front.is_empty() and back.is_empty():
+		front = wings
+		wings = []
+	var cols := clampi(front.size(), 1, 6)
+	var col_w := 0.0
+	var row_d := 0.0
+	for s in front:
+		var sz := _squad_size(s)
+		col_w = maxf(col_w, sz.x + 4.0)
+		row_d = maxf(row_d, sz.y + 3.5)
+	var rows := int(ceil(float(front.size()) / cols))
+	for k in front.size():
+		var in_row := mini(cols, front.size() - (k / cols) * cols)
+		squad_off[front[k]] = Vector2((k % cols - (in_row - 1) * 0.5) * col_w, (k / cols) * row_d)
+	var line_w := cols * col_w
+	if not back.is_empty():
+		var bc := clampi(back.size(), 1, 6)
+		var bw := 0.0
+		for s in back:
+			bw = maxf(bw, _squad_size(s).x + 4.0)
+		for k in back.size():
+			var in_row := mini(bc, back.size() - (k / bc) * bc)
+			squad_off[back[k]] = Vector2((k % bc - (in_row - 1) * 0.5) * bw, rows * row_d + 3.0 + (k / bc) * 5.0)
+	for k in wings.size():
+		var side := -1.0 if k % 2 == 0 else 1.0
+		var w := k / 2
+		var cw := _squad_size(wings[k]).x + 5.0
+		squad_off[wings[k]] = Vector2(side * (line_w * 0.5 + 6.0 + cw * 0.5 + (w % 4) * cw), (w / 4) * 8.0)
+
+
+## 群組中心 + 排列位移 → 世界座標
+func _place(center: Vector3, fwd: Vector3, off: Vector2) -> Vector3:
+	var right := Vector3(-fwd.z, 0, fwd.x)
+	var p := center + right * off.x - fwd * off.y
+	return terrain.clamp_to_map(p, 6.0)
+
+
+## 一群小隊的中心：用它們目前的集結點（衝鋒中的用隊員平均位置）
+func _group_center(sel: Array[int]) -> Vector3:
+	var c := Vector3.ZERO
+	for s in sel:
+		c += squad_anchor[s] if squad_order[s] != Order.CHARGE and squad_order[s] != Order.ATTACK else squad_center[s]
+	return c / maxf(sel.size(), 1)
+
+
+func _apply_command(cmd: Dictionary) -> void:
+	var t := int(cmd["team"])
+	var sel := _select(t, int(cmd.get("mask", MASK_ALL)))
+	if sel.is_empty():
+		return
+	match str(cmd.get("kind", "order")):
+		"form":
+			var f := int(cmd["form"])
+			for s in sel:
+				squad_form[s] = f
+			_rearrange(sel)
+		"halt":
+			for s in sel:
+				if squad_order[s] == Order.MOVE:
+					squad_order[s] = Order.HOLD
+		"keep":
+			for s in sel:
+				squad_keep[s] = 1 if cmd["keep"] else 0
+		"advance":
+			var fwd: Vector3 = cmd["fwd"]
+			for s in sel:
+				var f := fwd if fwd.length() > 0.1 else squad_facing[s]
+				var base := squad_anchor[s] if squad_order[s] == Order.HOLD or squad_order[s] == Order.MOVE else squad_center[s]
+				if squad_order[s] == Order.MOVE:
+					base = squad_goal[s]
+				squad_facing[s] = f
+				_start_move(s, base, terrain.clamp_to_map(base + f * float(cmd["dist"]), 6.0))
+		_:
+			var order := int(cmd["order"])
+			var at: Vector3 = cmd["pos"]
+			var fwd: Vector3 = cmd["fwd"]
+			if order == Order.HOLD or order == Order.MOVE or order == Order.FOLLOW:
+				_arrange(sel)
+			for s in sel:
+				if siege != null and squad_role[s] == Role.RAM and order != Order.CHARGE:
+					squad_role[s] = Role.NORMAL
+				var f := fwd if fwd.length() > 0.1 else squad_facing[s]
+				match order:
+					Order.HOLD:
+						squad_order[s] = order
+						squad_facing[s] = f
+						squad_anchor[s] = _place(at, f, squad_off[s])
+						if siege != null:
+							squad_zone[s] = _point_zone(at)
+							if squad_zone[s] == SiegeMap.Zone.WALL:
+								squad_anchor[s] = _wall_rally(s, at)
+					Order.MOVE:
+						squad_facing[s] = f
+						var from := squad_center[s] if squad_order[s] == Order.CHARGE or squad_order[s] == Order.ATTACK else squad_anchor[s]
+						_start_move(s, from, _place(at, f, squad_off[s]))
+					Order.ATTACK:
+						squad_order[s] = order
+						squad_tsq[s] = int(cmd.get("tsq", -1))
+					_:
+						squad_order[s] = order
+			if order == Order.FOLLOW:
+				for s in sel:
+					squad_timer[s] = 0.0      # 下一步就更新跟隨位置
+
+
+func _start_move(s: int, from: Vector3, goal: Vector3) -> void:
+	squad_order[s] = Order.MOVE
+	squad_anchor[s] = Vector3(from.x, 0, from.z)
+	squad_goal[s] = goal
+
+
+## 換陣型後就地重排（守位、行進中的小隊）
+func _rearrange(sel: Array[int]) -> void:
+	var still: Array[int] = []
+	for s in sel:
+		if squad_order[s] == Order.HOLD or squad_order[s] == Order.MOVE:
+			still.append(s)
+	if still.is_empty() or siege != null:
+		return
+	var moving := squad_order[still[0]] == Order.MOVE
+	var c := Vector3.ZERO
+	for s in still:
+		c += squad_goal[s] if moving else squad_anchor[s]
+	c /= still.size()
+	var f := squad_facing[still[0]]
+	_arrange(still)
+	for s in still:
+		if moving:
+			squad_goal[s] = _place(c, f, squad_off[s])
+		else:
+			squad_anchor[s] = _place(c, f, squad_off[s])
+
+
+## 列隊行進：集結點以固定速度往目標走；隊伍落後太多（集結點離隊員中心超過 6 公尺）就等一下
+func _march(delta: float) -> void:
+	for s in squad_count:
+		if squad_order[s] != Order.MOVE or squad_alive[s] <= 0:
+			continue
+		var a := squad_anchor[s]
+		var g := squad_goal[s]
+		var lead := Vector2(a.x - squad_center[s].x, a.z - squad_center[s].z).length()
+		var spd := MARCH_SPEED * (1.6 if squad_type[s] == UnitType.CAVALRY else 1.0) * (0.25 if lead > 6.0 else 1.0)
+		var to := Vector2(g.x - a.x, g.z - a.z)
+		var d := to.length()
+		if d < 0.3:
+			squad_anchor[s] = g
+			squad_order[s] = Order.HOLD
+			continue
+		var step := minf(d, spd * delta)
+		squad_anchor[s] = Vector3(a.x + to.x / d * step, 0, a.z + to.y / d * step)
 
 
 # ---------------------------------------------------------------------------
@@ -603,12 +913,34 @@ func _physics_process(delta: float) -> void:
 func _rebuild_grid() -> void:
 	_cell_head.fill(-1)
 	_cell_next.resize(count)
+	_sq_head.resize(squad_count)
+	_sq_head.fill(-1)
+	_sq_next.resize(count)
+	var sums := PackedVector3Array()
+	sums.resize(squad_count)
+	var ns := PackedInt32Array()
+	ns.resize(squad_count)
 	for i in count:
 		if state[i] == State.DEAD:
 			continue
 		var c := _cell_of(pos[i].x, pos[i].z)
 		_cell_next[i] = _cell_head[c]
 		_cell_head[c] = i
+		var sq := squad[i]
+		_sq_next[i] = _sq_head[sq]
+		_sq_head[sq] = i
+		sums[sq] += pos[i]
+		ns[sq] += 1
+	for s in squad_count:
+		if ns[s] > 0:
+			squad_center[s] = sums[s] / ns[s]
+		var far := 0.0
+		var j := _sq_head[s]
+		var c2 := squad_center[s]
+		while j != -1:
+			far = maxf(far, Vector2(pos[j].x - c2.x, pos[j].z - c2.z).length_squared())
+			j = _sq_next[j]
+		squad_spread[s] = sqrt(far)
 
 
 func _cell_of(x: float, z: float) -> int:
@@ -622,21 +954,63 @@ func _army_tick(delta: float) -> void:
 	if _army_timer > 0.0:
 		return
 	_army_timer = army_think
-	# AI 指揮官（佔位）：每個非玩家指揮的陣營依設定決定何時全軍衝鋒
-	#   一般：開戰 enemy_ai_charge_at 秒後，或敵人逼近己方小隊時；立即衝鋒：開戰就衝；守位：只有敵人逼近才衝
+	# 電腦指揮官：用跟玩家一樣的指令
+	#   一般：開戰 2 秒後全軍列隊推進到離敵軍約 34 公尺，敵人逼近、推進完成或 60 秒後，步兵與騎兵衝鋒（弓兵原地放箭）
+	#   立即衝鋒：開戰就全軍衝；守位：原地等，敵人逼近才衝
 	for t in 2:
-		if not ai_team[t] or _ai_charged[t]:
+		if not ai_team[t] or _ai_phase[t] >= 2:
 			continue
 		var mode: int = ai_mode[t]
-		var go := auto_charge_both or mode == BattleSetup.AiMode.CHARGE
-		if not go and mode == BattleSetup.AiMode.NORMAL and battle_time >= enemy_ai_charge_at:
-			go = true
-		if not go:
-			go = _enemy_near_squads(t, 24.0)
-		if go:
-			_ai_charged[t] = true
-			_enemy_charged = true
-			issue_order(t, Order.CHARGE, Vector3.ZERO, Vector3.ZERO)
+		if auto_charge_both or mode == BattleSetup.AiMode.CHARGE:
+			_ai_charge(t, MASK_ALL)
+			continue
+		if mode == BattleSetup.AiMode.HOLD:
+			if _enemy_near_squads(t, 24.0):
+				_ai_charge(t, MASK_ALL)
+			continue
+		if _ai_phase[t] == 0:
+			if battle_time < 2.0:
+				continue
+			var mine := _army_center(t)
+			var theirs := _army_center(1 - t)
+			var dir := theirs - mine
+			dir.y = 0.0
+			var dist := dir.length()
+			if dist > 0.1:
+				dir /= dist
+			_ai_phase[t] = 1
+			# 對方也是一般模式的電腦時兩邊都會前進，各走一半
+			var both: bool = ai_team[1 - t] and ai_mode[1 - t] == BattleSetup.AiMode.NORMAL
+			var adv: float = (dist - ADVANCE_STOP) * (0.5 if both else 1.0)
+			if adv > 4.0:
+				issue_advance(t, adv, dir, MASK_ALL)
+			continue
+		var marching := false
+		for s in squad_count:
+			if squad_team[s] == t and squad_alive[s] > 0 and squad_order[s] == Order.MOVE:
+				marching = true
+		if _enemy_near_squads(t, 30.0) or not marching or battle_time > 60.0:
+			_ai_charge(t, MASK_INF | MASK_CAV)
+
+
+func _ai_charge(t: int, mask: int) -> void:
+	_ai_phase[t] = 2
+	_ai_charged[t] = true
+	_enemy_charged = true
+	issue_order(t, Order.CHARGE, Vector3.ZERO, Vector3.ZERO, mask)
+	if mask != MASK_ALL:
+		issue_halt(t, MASK_ALL & ~mask)     # 沒衝鋒的（弓兵）停在原地放箭
+
+
+## 陣營 t 所有活著士兵的平均位置
+func _army_center(t: int) -> Vector3:
+	var c := Vector3.ZERO
+	var n := 0
+	for s in squad_count:
+		if squad_team[s] == t and squad_alive[s] > 0:
+			c += squad_center[s] * squad_alive[s]
+			n += squad_alive[s]
+	return c / maxf(n, 1)
 
 
 ## 有沒有敵方士兵（或敵方玩家）進入陣營 t 任一小隊集結點的 r 公尺內
@@ -660,67 +1034,46 @@ func player_team() -> int:
 
 
 func _squad_tick(delta: float) -> void:
-	# 新命令：由小隊層在下一次決策時取用（玩家方命令延遲 ≤ squad_think）
 	var pending := command_queue.duplicate()
 	command_queue.clear()
+	for cmd in pending:
+		_apply_command(cmd)
+	_march(delta)
 	for s in squad_count:
 		squad_timer[s] -= delta
-		var take_now := false
-		for cmd in pending:
-			if int(cmd["team"]) == squad_team[s]:
-				take_now = true
-		if squad_timer[s] > 0.0 and not take_now:
+		if squad_timer[s] > 0.0:
 			continue
 		squad_timer[s] = squad_think
-		for cmd in pending:
-			if int(cmd["team"]) != squad_team[s]:
-				continue
-			squad_order[s] = int(cmd["order"])
-			if siege != null and squad_role[s] == Role.RAM and squad_order[s] != Order.CHARGE:
-				squad_role[s] = Role.NORMAL
-			if squad_order[s] == Order.HOLD:
-				# 在指定點集結：各小隊在該點附近排成橫列
-				var fwd: Vector3 = cmd["fwd"]
-				if fwd.length() < 0.1:
-					fwd = squad_facing[s]
-				squad_facing[s] = fwd
-				squad_anchor[s] = _rally_point(s, cmd["pos"], fwd)
-				if siege != null:
-					squad_zone[s] = _point_zone(cmd["pos"])
-					if squad_zone[s] == SiegeMap.Zone.WALL:
-						squad_anchor[s] = _wall_rally(s, cmd["pos"])
 		if squad_order[s] == Order.FOLLOW and player != null:
 			var pf := player.facing
 			squad_facing[s] = pf
-			squad_anchor[s] = _rally_point(s, player.global_position - pf * 8.0, pf)
+			squad_anchor[s] = _place(player.global_position - pf * 8.0, pf, squad_off[s])
 			if siege != null:
 				squad_zone[s] = _point_zone(player.global_position)
 				if squad_zone[s] == SiegeMap.Zone.WALL:
 					squad_anchor[s] = _wall_rally(s, player.global_position)
+		elif squad_order[s] == Order.ATTACK:
+			var ts := squad_tsq[s]
+			if ts < 0 or ts >= squad_count or squad_alive[ts] <= 0:
+				squad_order[s] = Order.CHARGE     # 目標小隊被消滅：改成自由衝鋒
 
 
-## 第 s 個小隊在集結點附近的位置（同陣營小隊依序橫向排開）。
+## 第 s 個小隊在集結點附近的位置（舊介面，攻城戰牆頂集結仍用到）
 func _rally_point(s: int, at: Vector3, fwd: Vector3) -> Vector3:
-	var idx := 0
-	var total := 0
-	for o in squad_count:
-		if squad_team[o] == squad_team[s]:
-			if o < s:
-				idx += 1
-			total += 1
-	var right := Vector3(-fwd.z, 0, fwd.x)
-	var cols := mini(total, 4)
-	var c := idx % cols
-	var r := idx / cols
-	return at + right * ((c - (cols - 1) * 0.5) * 9.5) - fwd * (r * 5.0)
+	return _place(at, fwd, squad_off[s])
 
 
 func _recount_attackers() -> void:
 	attackers.fill(0)
+	_player_att_n = 0
 	for i in count:
 		var tg := target[i]
-		if tg >= 0 and state[i] != State.DEAD:
+		if state[i] == State.DEAD:
+			continue
+		if tg >= 0:
 			attackers[tg] += 1
+		elif tg == TARGET_PLAYER:
+			_player_att_n += 1
 
 
 # ---------------------------------------------------------------------------
@@ -741,21 +1094,33 @@ func _think(i: int) -> void:
 	if siege != null and tg >= 0 and not _siege_can_target(i, tg):
 		tg = NO_TARGET
 
-	var radius := search_radius if order == Order.CHARGE else engage_radius
+	var radius := search_radius if (order == Order.CHARGE or order == Order.ATTACK) else engage_radius
+	var leash := squad_keep[sq] == 1 and order != Order.CHARGE and order != Order.ATTACK
+	if leash:
+		radius = _l_reach[lo[i]] + LEASH + 1.0       # 保持陣型：只理會身邊的敵人
 	if utype[i] == UnitType.ARCHER:
 		radius = maxf(radius, ARCHER_RANGE + HIGH_GROUND_RANGE_MAX)
-	var best := _find_enemy(i, p, my_team, radius)
+	var best := NO_TARGET
+	if order == Order.ATTACK and squad_tsq[sq] >= 0 and squad_alive[squad_tsq[sq]] > 0:
+		# 攻擊指定敵隊：身邊 3 公尺內有別的敵人先應付，否則找目標小隊最近的人
+		best = _find_enemy(i, p, my_team, 3.0)
+		if best == NO_TARGET:
+			best = _nearest_in_squad(p, squad_tsq[sq])
+	else:
+		best = _find_enemy(i, p, my_team, radius)
 	if best != NO_TARGET:
 		tg = best
 	elif tg == NO_TARGET and order == Order.CHARGE:
 		tg = _find_enemy_global(p, my_team, i)
+	if leash and tg >= 0 and utype[i] != UnitType.ARCHER and pos[tg].distance_to(slot_position(sq, slot[i])) > _l_reach[lo[i]] + LEASH + 1.5:
+		tg = NO_TARGET
 	# 敵方士兵也會把玩家當目標
 	if my_team != player_team() and player != null and player.is_targetable():
 		var pd := p.distance_to(player.global_position)
 		var cur_d := 1e9
 		if tg >= 0:
 			cur_d = p.distance_to(pos[tg])
-		if pd < radius and pd < cur_d and _player_attackers() < max_attackers_player and (siege == null or _siege_can_target_player(i)):
+		if pd < radius and pd < cur_d and _player_att_n < max_attackers_player and (siege == null or _siege_can_target_player(i)):
 			tg = TARGET_PLAYER
 	if tg != target[i]:
 		if target[i] >= 0:
@@ -773,19 +1138,24 @@ func _think(i: int) -> void:
 func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 	var best := NO_TARGET
 	var best_d := radius * radius
-	# 半徑很大（弓兵射程）時，掃描網格格子數會比直接掃全部士兵還多，改用線性掃描
+	# 半徑很大（弓兵射程、衝鋒）時，網格要掃的格子太多：改成先用小隊中心篩掉太遠的敵方小隊，只看附近小隊的隊員
 	if radius > 24.0:
-		for j in count:
-			if state[j] == State.DEAD or team[j] == my_team:
+		for s in squad_count:
+			if squad_team[s] == my_team or squad_alive[s] <= 0:
 				continue
-			if siege != null and not _siege_can_target(i, j):
+			var reach_s := radius + squad_spread[s]
+			if Vector2(squad_center[s].x - p.x, squad_center[s].z - p.z).length_squared() > reach_s * reach_s:
 				continue
-			var dj := p.distance_squared_to(pos[j])
-			if attackers[j] >= max_attackers and target[i] != j and dj > 4.0:
-				dj *= 4.0
-			if dj < best_d:
-				best_d = dj
-				best = j
+			var j := _sq_head[s]
+			while j != -1:
+				if siege == null or _siege_can_target(i, j):
+					var dj := p.distance_squared_to(pos[j])
+					if attackers[j] >= max_attackers and target[i] != j and dj > 4.0:
+						dj *= 4.0
+					if dj < best_d:
+						best_d = dj
+						best = j
+				j = _sq_next[j]
 		return best
 	var r_cells := int(ceil(radius / cell_size))
 	var c0x := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
@@ -816,27 +1186,50 @@ func _find_enemy(i: int, p: Vector3, my_team: int, radius: float) -> int:
 	return best
 
 
+## 附近沒有敵人時：找最近的敵方小隊（以中心距離扣掉隊伍散開範圍估計），再取該隊最近的人
 func _find_enemy_global(p: Vector3, my_team: int, i := -1) -> int:
+	if siege != null:
+		var best := NO_TARGET
+		var best_d := INF
+		for j in count:
+			if state[j] == State.DEAD or team[j] == my_team:
+				continue
+			if i >= 0 and not _siege_can_target(i, j):
+				continue
+			var d := p.distance_squared_to(pos[j])
+			if d < best_d:
+				best_d = d
+				best = j
+		return best
+	var best_s := -1
+	var best_sd := INF
+	for s in squad_count:
+		if squad_team[s] == my_team or squad_alive[s] <= 0:
+			continue
+		var d := Vector2(squad_center[s].x - p.x, squad_center[s].z - p.z).length() - squad_spread[s]
+		if d < best_sd:
+			best_sd = d
+			best_s = s
+	if best_s < 0:
+		return NO_TARGET
+	return _nearest_in_squad(p, best_s)
+
+
+func _nearest_in_squad(p: Vector3, s: int) -> int:
 	var best := NO_TARGET
 	var best_d := INF
-	for j in count:
-		if state[j] == State.DEAD or team[j] == my_team:
-			continue
-		if siege != null and i >= 0 and not _siege_can_target(i, j):
-			continue
+	var j := _sq_head[s]
+	while j != -1:
 		var d := p.distance_squared_to(pos[j])
 		if d < best_d:
 			best_d = d
 			best = j
+		j = _sq_next[j]
 	return best
 
 
 func _player_attackers() -> int:
-	var n := 0
-	for i in count:
-		if target[i] == TARGET_PLAYER and state[i] != State.DEAD:
-			n += 1
-	return n
+	return _player_att_n
 
 
 func _target_pos(tg: int) -> Vector3:
@@ -921,9 +1314,14 @@ func _move_and_fight(delta: float) -> void:
 				if nav:
 					desired = face * run
 				elif ut == UnitType.ARCHER and (d > ARCHER_MIN_RANGE or (siege != null and absf(tp.y - p.y) > 1.7)):
-					# 弓兵：射程內站定放箭，射程外前進
-					if d > archer_range(p.y - tp.y):
-						desired = face * run
+					# 弓兵：射程內站定放箭，射程外前進；行進命令中先走到隊形位置再射
+					if squad_order[squad[i]] == Order.MOVE and p.distance_squared_to(slot_position(squad[i], slot[i])) > 9.0:
+						use_slot = true
+					elif d > archer_range(p.y - tp.y):
+						if squad_keep[squad[i]] == 1 and squad_order[squad[i]] != Order.CHARGE:
+							use_slot = true       # 保持陣型：射程外不追，留在隊形裡
+						else:
+							desired = face * run
 					elif atk_cooldown[i] <= 0.0:
 						atk_anim[i] = 0.6
 						atk_cooldown[i] = rng.randf_range(2.4, 3.2)
@@ -953,7 +1351,9 @@ func _move_and_fight(delta: float) -> void:
 				goal = slot_position(sq_i, slot[i])
 				if siege != null:
 					goal_zone = squad_zone[sq_i]
-			elif siege != null:
+			if order == Order.ATTACK and squad_tsq[sq_i] >= 0 and squad_alive[squad_tsq[sq_i]] > 0:
+				goal = squad_center[squad_tsq[sq_i]]
+			elif order == Order.CHARGE and siege != null and goal == Vector3.INF:
 				goal = _siege_objective(i)
 				goal_zone = _obj_zone
 			if goal != Vector3.INF:
@@ -1482,6 +1882,11 @@ static func _closest_on_tri(p: Vector3, a: Vector3, b: Vector3, c: Vector3) -> V
 func _check_victory() -> void:
 	if winner != -1:
 		return
+	if OS.get_cmdline_user_args().has("--trace") and int(battle_time * 60.0) % 120 == 0:
+		var od := []
+		for s in squad_count:
+			od.append("%d%s" % [squad_order[s], "ABC"[squad_type[s] % 3]])
+		print("t=%.0f alive %d/%d fired %d/%d ai %s %s gap %.1f" % [battle_time, alive_count[0], alive_count[1], dbg_fired[0], dbg_fired[1], str(_ai_phase), " ".join(od), _army_center(1).x - _army_center(0).x])
 	if siege != null and battle_time >= siege_time_limit and alive_count[0] > 0 and alive_count[1] > 0:
 		winner = 1 - siege_attacker
 		battle_finished.emit(winner)
@@ -1504,8 +1909,6 @@ func stats_text() -> String:
 		"（你）" if pt == 0 else "", alive_count[0], "（你）" if pt == 1 else "", alive_count[1], kills[0], kills[1], battle_time]
 	if time_limit > 0.0:
 		s += "／%.0f" % time_limit
-	if squad_count > 0 and pt >= 0:
-		s += "　我軍命令：%s" % order_name(_first_order(pt))
 	s += "\n戰場邏輯 %.2f ms（網格 %.2f／決策 %.2f［%d 次］／移動戰鬥 %.2f／箭矢 %.2f［%d 支］）　士兵畫面 %.2f ms" % [
 		t_total / 1000.0, t_grid / 1000.0, t_think / 1000.0, think_calls, t_move / 1000.0, t_arrows / 1000.0, arrows_in_flight, t_render / 1000.0]
 	if winner != -1:
@@ -1527,17 +1930,10 @@ func stat_unit(t: int, ut: int) -> Vector2i:
 	return Vector2i(stat_start[t * 4 + ut], stat_dead[t * 4 + ut])
 
 
-func _first_order(t: int) -> int:
-	for s in squad_count:
-		if squad_team[s] == t:
-			return squad_order[s]
-	return Order.HOLD
-
-
 func append_debug_lines(pts: PackedVector3Array, cols: PackedColorArray) -> void:
 	# 小隊集結點（十字）與每個士兵指向目標的線（只畫前 200 條）
 	for s in squad_count:
-		if squad_alive[s] <= 0 or squad_order[s] == Order.CHARGE:
+		if squad_alive[s] <= 0 or squad_order[s] == Order.CHARGE or squad_order[s] == Order.ATTACK:
 			continue
 		var a := squad_anchor[s]
 		a.y = terrain.get_height(a.x, a.z) + 0.2
