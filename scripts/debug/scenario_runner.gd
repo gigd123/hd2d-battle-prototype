@@ -198,16 +198,15 @@ func _field_seg(t0: float, terrain: String, weapon_idx: int, caption: String, st
 	var add := func(dt: float, a: String, arg: String = ""): steps.append([t0 + dt, a, arg])
 	add.call(-0.05, "report", "")
 	add.call(0.0, "terrain", terrain)
+	add.call(0.1, "weapon", str(weapon_idx))
 	add.call(0.15, "overview", "38")
-	add.call(0.2, "weapon", str(weapon_idx))
 	if style == "bow":
 		add.call(0.25, "charge_team", "1")
 	else:
 		add.call(0.25, "charge", "")
 	if style == "mounted":
 		add.call(0.4, "tap", "interact")
-	add.call(2.8, "playercam", "-1.5708,6.5,14")
-	add.call(2.8, "hud_show", "")
+	add.call(2.8, "playercam", "-1.5708,10,24")
 	add.call(2.85, "caption", "%s・%s" % [BattleTerrain.TYPE_NAMES[ter_i], caption])
 	match style:
 		"mounted":
