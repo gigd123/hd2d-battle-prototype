@@ -131,6 +131,15 @@ func texture(layer: String, tint := Color(0, 0, 0, 0)) -> Texture2D:
 	return tex
 
 
+## 釋放某個圖層的貼圖與影像快取（換武器時把用不到的武器圖層丟掉）
+func release_layer(layer: String) -> void:
+	for k in _tex_cache.keys():
+		if (k as String).begins_with(layer + "|"):
+			_tex_cache.erase(k)
+	if layers.has(layer):
+		_img_cache.erase(layers[layer]["image"])
+
+
 ## 優先用編輯器匯入的資源（匯出遊戲時也有效），沒有匯入過就直接讀 PNG 檔（開發時方便）
 func _image(file: String) -> Image:
 	if _img_cache.has(file):

@@ -160,7 +160,9 @@ func _setup_input_map() -> void:
 	_add_keys("attack", [KEY_SPACE])
 	_add_mouse("block", MOUSE_BUTTON_RIGHT)    # 舉盾（按住）
 	_add_keys("block", [KEY_C])
-	_add_keys("switch_weapon", [KEY_Q])       # 劍 ⇄ 長槍
+	_add_keys("switch_weapon", [KEY_Q])       # 下一把武器
+	_add_keys("prev_weapon", [KEY_Z])         # 上一把武器
+	_add_keys("aim_view", [KEY_F])            # 弓的瞄準視角：第三人稱肩後 ⇄ 第一人稱
 	_add_keys("order_charge", [KEY_1])         # 全軍衝鋒
 	_add_keys("order_hold", [KEY_2])           # 在此集結（守位）
 	_add_keys("order_follow", [KEY_3])         # 跟隨我

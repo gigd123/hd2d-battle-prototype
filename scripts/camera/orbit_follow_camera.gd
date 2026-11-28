@@ -22,6 +22,13 @@ extends Node3D
 @export var fov := 38.0
 
 var yaw := 0.0
+## 弓箭瞄準：0 = 一般、1 = 第三人稱肩後、2 = 第一人稱（由玩家每幀設定）
+var aim_mode := 0
+@export var aim_distance := 3.2
+@export var aim_shoulder := Vector2(0.9, 0.35)   # 肩後視角：往右、往上偏移
+@export var aim_fov := 30.0
+@export var fp_fov := 50.0
+var _aim_k := 0.0                                  # 肩後視角的過渡 0..1
 var terrain: BattleTerrain
 var auto_orbit := false
 var auto_orbit_center := Vector3.ZERO
@@ -70,8 +77,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var mm := event as InputEventMouseMotion
-		yaw -= mm.relative.x * mouse_sensitivity
-		pitch_deg = clampf(pitch_deg + mm.relative.y * mouse_sensitivity * 57.3, min_pitch_deg, max_pitch_deg)
+		var sens := mouse_sensitivity * (0.6 if aim_mode != 0 else 1.0)   # 瞄準時降低靈敏度
+		yaw -= mm.relative.x * sens
+		pitch_deg = clampf(pitch_deg + mm.relative.y * sens * 57.3, min_pitch_deg, max_pitch_deg)
 	elif event.is_action_pressed("zoom_in"):
 		distance = maxf(min_distance, distance * 0.9)
 	elif event.is_action_pressed("zoom_out"):
@@ -86,7 +94,13 @@ func _process(delta: float) -> void:
 	elif target:
 		goal = target.call("visual_position") if target.has_method("visual_position") else target.global_position
 	_focus = _focus.lerp(goal, 1.0 - exp(-(1.2 if spectating else follow_smooth) * delta))
-	var look_at_point := _focus + Vector3(0, 1.4, 0)
+	var real_dt0 := minf(delta / maxf(Engine.time_scale, 0.001), 0.05)
+	_aim_k = move_toward(_aim_k, 1.0 if aim_mode == 1 else 0.0, real_dt0 * 6.0)
+	if aim_mode == 2 and target and not spectating and not auto_orbit:
+		_first_person(goal, delta)
+		return
+	camera.fov = lerpf(fov, aim_fov, _aim_k)
+	var look_at_point := _focus + Vector3(0, 1.4, 0) + (flat_right() * aim_shoulder.x + Vector3(0, aim_shoulder.y, 0)) * _aim_k
 	# 俯角低於 low_orbit_deg：鏡頭位置停在低角度，多出來的角度用來「抬頭」，不會鑽進地面
 	var pitch := deg_to_rad(maxf(pitch_deg, low_orbit_deg))
 	var look_up := deg_to_rad(maxf(0.0, low_orbit_deg - pitch_deg))
@@ -95,7 +109,7 @@ func _process(delta: float) -> void:
 		GameConfig.auto_full_billboard = pitch_deg > 68.0
 	else:
 		GameConfig.auto_full_billboard = pitch_deg > 72.0
-	var offset := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * distance
+	var offset := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * lerpf(distance, aim_distance, _aim_k)
 	var cam_pos := look_at_point + offset
 	# 不鑽進地形：相機至少高於地面 1 公尺
 	if terrain:
@@ -118,6 +132,23 @@ func _process(delta: float) -> void:
 	_attrs.dof_blur_far_transition = distance * 1.5
 	_attrs.dof_blur_near_distance = maxf(distance * 0.45, 1.0)
 	_attrs.dof_blur_near_transition = distance * 0.3
+	_attrs.dof_blur_near_enabled = GameConfig.postfx_enabled and _aim_k < 0.5
+
+
+## 第一人稱：鏡頭放在頭的位置，方向直接用 yaw / 俯角（俯角負值 = 抬頭）
+func _first_person(goal: Vector3, _delta: float) -> void:
+	var mounted: bool = target.get("mounted") == true
+	var eye := goal + Vector3(0, 2.6 if mounted else 1.62, 0)
+	var p := deg_to_rad(pitch_deg)
+	var dir := -Vector3(sin(yaw) * cos(p), sin(p), cos(yaw) * cos(p))
+	camera.fov = fp_fov
+	camera.global_position = eye
+	camera.look_at(eye + dir, Vector3.UP if absf(dir.y) < 0.999 else Vector3.FORWARD)
+	_focus = goal
+	_aim_k = 0.0
+	_attrs.dof_blur_near_enabled = false
+	_attrs.dof_blur_far_distance = 60.0
+	_attrs.dof_blur_far_transition = 40.0
 
 
 ## 切換觀戰鏡頭；回傳切換後是否在觀戰

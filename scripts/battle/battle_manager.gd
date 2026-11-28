@@ -117,6 +117,7 @@ var arrow_team := PackedByteArray()
 var arrow_state := PackedByteArray()    # 0 無、1 飛行中、2 插在地上
 var arrow_life := PackedFloat32Array()
 var arrow_mult := PackedFloat32Array()   # 高地優勢的傷害倍率
+var arrow_dmg := PackedFloat32Array()    # >0：玩家射的箭（固定傷害，命中回報給玩家）
 var _arrow_next := 0
 var arrows_in_flight := 0
 
@@ -253,6 +254,8 @@ func _reset_arrows() -> void:
 	arrow_life = PackedFloat32Array()
 	arrow_mult = PackedFloat32Array()
 	arrow_mult.resize(MAX_ARROWS)
+	arrow_dmg = PackedFloat32Array()
+	arrow_dmg.resize(MAX_ARROWS)
 	arrow_pos.resize(MAX_ARROWS)
 	arrow_vel.resize(MAX_ARROWS)
 	arrow_team.resize(MAX_ARROWS)
@@ -886,6 +889,21 @@ func _fire_arrow(i: int, p: Vector3, tg: int, d: float) -> void:
 	arrow_state[k] = 1
 	arrow_life[k] = 4.0
 	arrow_mult[k] = 1.0 + clampf((p.y - tp.y) * HIGH_GROUND_DMG_PER_M, -0.15, 0.35)
+	arrow_dmg[k] = 0.0
+	arrow_fired.emit(start)
+
+
+## 玩家射箭：初速由拉弓程度決定，傷害固定；命中時呼叫 player.on_arrow_hit
+func fire_player_arrow(start: Vector3, v0: Vector3, dmg: float, shooter_team: int) -> void:
+	var k := _arrow_next
+	_arrow_next = (k + 1) % MAX_ARROWS
+	arrow_pos[k] = start
+	arrow_vel[k] = v0
+	arrow_team[k] = shooter_team
+	arrow_state[k] = 1
+	arrow_life[k] = 5.0
+	arrow_mult[k] = 1.0
+	arrow_dmg[k] = dmg
 	arrow_fired.emit(start)
 
 
@@ -905,50 +923,64 @@ func _update_arrows(delta: float) -> void:
 				arrow_state[k] = 0
 			continue
 		arrows_in_flight += 1
-		var v := arrow_vel[k] + g * delta
-		var p := arrow_pos[k] + v * delta
-		arrow_vel[k] = v
-		arrow_pos[k] = p
-		arrow_life[k] -= delta
-		var ground := terrain.get_height(p.x, p.z)
-		if p.y <= ground + 0.05 or arrow_life[k] <= 0.0:
-			arrow_state[k] = 2
-			arrow_life[k] = ARROW_STUCK_TIME
-			arrow_pos[k] = Vector3(p.x, ground + 0.2, p.z)
-			arrow_hit.emit(arrow_pos[k], false)
-			continue
-		if p.y - ground > 3.0:
-			continue
-		var tm := arrow_team[k]
-		var hit := -1
-		var cx := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
-		var cz := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
-		for gz in range(maxi(cz - 1, 0), mini(cz + 2, _grid_w)):
+		# 玩家的箭很快（最高 60 m/s），一步會飛將近 1 公尺，切成小步檢查才不會穿過人
+		var steps := 1 if arrow_dmg[k] <= 0.0 else clampi(int(ceil(arrow_vel[k].length() * delta / 0.35)), 1, 6)
+		for sub in steps:
+			if arrow_state[k] != 1:
+				break
+			_step_arrow(k, delta / steps, g, pl_ok, pl_center, pl_r)
+
+
+func _step_arrow(k: int, delta: float, g: Vector3, pl_ok: bool, pl_center: Vector3, pl_r: float) -> void:
+	var v := arrow_vel[k] + g * delta
+	var p := arrow_pos[k] + v * delta
+	arrow_vel[k] = v
+	arrow_pos[k] = p
+	arrow_life[k] -= delta
+	var ground := terrain.get_height(p.x, p.z)
+	if p.y <= ground + 0.05 or arrow_life[k] <= 0.0:
+		arrow_state[k] = 2
+		arrow_life[k] = ARROW_STUCK_TIME
+		arrow_pos[k] = Vector3(p.x, ground + 0.2, p.z)
+		arrow_hit.emit(arrow_pos[k], false)
+		return
+	if p.y - ground > 3.0:
+		return
+	var tm := arrow_team[k]
+	var hit := -1
+	var cx := clampi(int((p.x - _grid_origin) / cell_size), 0, _grid_w - 1)
+	var cz := clampi(int((p.z - _grid_origin) / cell_size), 0, _grid_w - 1)
+	for gz in range(maxi(cz - 1, 0), mini(cz + 2, _grid_w)):
+		if hit != -1:
+			break
+		for gx in range(maxi(cx - 1, 0), mini(cx + 2, _grid_w)):
+			var j := _cell_head[gz * _grid_w + gx]
+			while j != -1:
+				if team[j] != tm and state[j] != State.DEAD:
+					var dx := p.x - pos[j].x
+					var dz := p.z - pos[j].z
+					var r := rad[j] + 0.15
+					if dx * dx + dz * dz < r * r and p.y >= pos[j].y and p.y <= pos[j].y + U_HEIGHT[utype[j]]:
+						hit = j
+						break
+				j = _cell_next[j]
 			if hit != -1:
 				break
-			for gx in range(maxi(cx - 1, 0), mini(cx + 2, _grid_w)):
-				var j := _cell_head[gz * _grid_w + gx]
-				while j != -1:
-					if team[j] != tm and state[j] != State.DEAD:
-						var dx := p.x - pos[j].x
-						var dz := p.z - pos[j].z
-						var r := rad[j] + 0.15
-						if dx * dx + dz * dz < r * r and p.y >= pos[j].y and p.y <= pos[j].y + U_HEIGHT[utype[j]]:
-							hit = j
-							break
-					j = _cell_next[j]
-				if hit != -1:
-					break
-		if hit != -1:
-			var flat := Vector3(v.x, 0, v.z).normalized()
+	if hit != -1:
+		var flat := Vector3(v.x, 0, v.z).normalized()
+		if arrow_dmg[k] > 0.0:
+			var killed := apply_damage(hit, arrow_dmg[k], flat * 0.35)
+			if player:
+				player.on_arrow_hit(p, arrow_dmg[k], killed)
+		else:
 			apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX) * arrow_mult[k], flat * 0.25)
-			arrow_state[k] = 0
-			arrow_hit.emit(p, true)
-			continue
-		if pl_ok and tm != player.team and p.distance_to(pl_center) < pl_r:
-			player.take_damage(ARROW_DAMAGE_PLAYER * arrow_mult[k], p - v.normalized())
-			arrow_state[k] = 0
-			arrow_hit.emit(p, true)
+		arrow_state[k] = 0
+		arrow_hit.emit(p, true)
+		return
+	if pl_ok and tm != player.team and p.distance_to(pl_center) < pl_r:
+		player.take_damage(ARROW_DAMAGE_PLAYER * arrow_mult[k], p - v.normalized(), true)
+		arrow_state[k] = 0
+		arrow_hit.emit(p, true)
 
 
 # ---------------------------------------------------------------------------

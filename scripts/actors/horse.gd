@@ -25,6 +25,7 @@ extends CharacterBody3D
 var heading := 0.0                     # 朝向（yaw），forward = (sin, 0, cos)
 var speed := 0.0
 var rider: Node3D = null
+var _owner_player: Node3D = null      # 這匹馬的主人（決定馬上騎士畫哪些圖層）
 var terrain: BattleTerrain
 var battle: Node = null                # BattleManager（階段 2 起）
 var visual: LayeredActorVisual
@@ -70,18 +71,21 @@ func _build_visual() -> void:
 	var rider_set := GameConfig.baked_set("knight")
 	if _baked and rider_set:
 		visual.setup_main_baked(_baked, ["horse"], CLOTH_TINT, 2.4)
-		var layers := ["body", "sword"]
-		if rider_set.layers.has("spear"):
-			layers.append("spear")
+		# 騎士的圖層跟著騎手目前的武器（身體＋盾＋武器）；沒有騎手時先用預設武器
+		var layers: Array = ["body", "sword"]
+		if _owner_player and _owner_player.has_method("visual_layers"):
+			layers = _owner_player.call("visual_layers", rider_set)
 		visual.setup_attach_baked(rider_set, layers, "saddle", "seat", CLOTH_TINT)
-		visual.set_layer_hidden("spear", true)
-		if rider != null and rider.has_method("_apply_weapon_layers"):
-			rider.call("_apply_weapon_layers")
 	else:
 		_baked = null
 		visual.setup_main(PlaceholderArt.horse_atlas(), PlaceholderArt.HORSE_FRAME, PlaceholderArt.HORSE_ROWS, PlaceholderArt.horse_anchors(), 2.4)
 		visual.setup_attach(PlaceholderArt.rider_atlas(), PlaceholderArt.RIDER_FRAME, PlaceholderArt.RIDER_ROWS, PlaceholderArt.rider_anchors(), "saddle", "seat")
 	add_child(visual)
+
+
+func set_owner_player(p: Node3D) -> void:
+	_owner_player = p
+	_build_visual()
 
 
 func forward() -> Vector3:
@@ -227,5 +231,5 @@ func _process(_delta: float) -> void:
 	var rider_row := 0
 	if rider != null and rider.has_method("rider_anim_row"):
 		rider_row = rider.call("rider_anim_row")
-	visual.set_attach_visible(rider != null and rider.call("is_seated"))
+	visual.set_attach_visible(rider != null and rider.call("is_seated") and not rider.call("first_person"))
 	visual.update_visual(visual_position(), forward(), cam, anim_row(), rider_row)

@@ -254,6 +254,8 @@ static func build_knight() -> Node3D:
 	# 第二把武器（長槍），示範「同一套動作、換武器只重烘武器層」
 	_cyl(wpn, "Spear_Shaft", 0.022, 0.022, 2.1, Vector3(0, 0.55, 0), C_WOOD)
 	_cyl(wpn, "Spear_Head", 0.0, 0.05, 0.24, Vector3(0, 1.72, 0), C_STEEL, Vector3.ZERO, 4)
+	_build_weapons(wpn)
+	_build_bow(root.find_child("HandL", true, false) as Node3D)
 
 	_add_player(root, {
 		"idle": [_knight_idle, 1.2, true],
@@ -275,8 +277,85 @@ static func build_knight() -> Node3D:
 		"hurt": [_knight_hurt, 0.35, false],
 		"ride_block": [_knight_ride_block, 1.2, true],
 		"ride_thrust": [_knight_ride_thrust, 0.6, false],
+		# 第四輪：雙手武器（大劍、雙手斧、雙手錘）揮砍與用武器格擋；弓
+		"heavy_a": [_knight_heavy_a, 0.8, false],
+		"heavy_b": [_knight_heavy_b, 0.8, false],
+		"walk_heavy_a": [_knight_walk_heavy_a, 0.8, false],
+		"walk_heavy_b": [_knight_walk_heavy_b, 0.8, false],
+		"ride_heavy_a": [_knight_ride_heavy_a, 0.8, false],
+		"ride_heavy_b": [_knight_ride_heavy_b, 0.8, false],
+		"parry": [_knight_parry, 1.2, true],
+		"walk_parry": [_knight_walk_parry, 0.8, true],
+		"ride_parry": [_knight_ride_parry, 1.2, true],
+		"bow_draw": [_knight_bow_draw, 0.6, false],
+		"bow_release": [_knight_bow_release, 0.35, false],
+		"bow_shoot": [_knight_bow_shoot, 0.9, false],
+		"walk_bow": [_knight_walk_bow, 0.8, true],
+		"ride_bow": [_knight_ride_bow, 1.2, true],
 	})
 	return root
+
+
+## 其餘近戰武器：握把都在右手（WeaponMount 的 +Y 是武器朝外的方向）。
+## 雙手武器的握把往下延伸，左手握在右手下方。名稱前綴 = 烘焙圖層。
+static func _build_weapons(wpn: Node3D) -> void:
+	# 大劍（雙手）
+	_cyl(wpn, "GSword_Grip", 0.022, 0.022, 0.38, Vector3(0, -0.12, 0), C_LEATHER_DARK)
+	_box(wpn, "GSword_Guard", Vector3(0.34, 0.04, 0.05), Vector3(0, 0.08, 0), C_STEEL_DARK)
+	_box(wpn, "GSword_Blade", Vector3(0.075, 1.25, 0.018), Vector3(0, 0.73, 0), C_STEEL)
+	_sphere(wpn, "GSword_Pommel", 0.035, Vector3(0, -0.33, 0), C_STEEL_DARK)
+	# 斧：H = 單手、T = 雙手；S = 短柄、L = 長柄
+	_axe(wpn, "AxeHS", -0.10, 0.50, 1.0)
+	_axe(wpn, "AxeHL", -0.10, 0.85, 1.0)
+	_axe(wpn, "AxeTS", -0.35, 0.85, 1.4)
+	_axe(wpn, "AxeTL", -0.50, 1.55, 1.5)
+	# 錘
+	_mace(wpn, "MaceHS", -0.10, 0.50, false)
+	_mace(wpn, "MaceHL", -0.10, 0.85, false)
+	_mace(wpn, "MaceTS", -0.35, 0.80, true)
+	_mace(wpn, "MaceTL", -0.50, 1.50, true)
+
+
+static func _axe(wpn: Node3D, n: String, y0: float, y1: float, size: float) -> void:
+	_cyl(wpn, n + "_Haft", 0.022, 0.022, y1 - y0, Vector3(0, (y0 + y1) * 0.5, 0), C_WOOD)
+	var hy := y1 - 0.08 * size
+	_box(wpn, n + "_Cheek", Vector3(0.12 * size, 0.07 * size, 0.035), Vector3(0.06 * size, hy, 0), C_STEEL_DARK)
+	_box(wpn, n + "_Edge", Vector3(0.05 * size, 0.22 * size, 0.025), Vector3(0.14 * size, hy, 0), C_STEEL)
+	if size > 1.2:
+		_box(wpn, n + "_Spike", Vector3(0.09, 0.03, 0.03), Vector3(-0.06, hy, 0), C_STEEL_DARK)
+
+
+static func _mace(wpn: Node3D, n: String, y0: float, y1: float, two_hand: bool) -> void:
+	_cyl(wpn, n + "_Haft", 0.022, 0.022, y1 - y0, Vector3(0, (y0 + y1) * 0.5, 0), C_WOOD if two_hand else C_LEATHER_DARK)
+	if not two_hand:
+		# 單手錘：凸緣錘頭
+		_box(wpn, n + "_Head", Vector3(0.11, 0.15, 0.11), Vector3(0, y1, 0), C_STEEL)
+		_box(wpn, n + "_Flange", Vector3(0.15, 0.11, 0.04), Vector3(0, y1, 0), C_STEEL_DARK, Vector3(0, 45, 0))
+		_box(wpn, n + "_Flange2", Vector3(0.04, 0.11, 0.15), Vector3(0, y1, 0), C_STEEL_DARK, Vector3(0, 45, 0))
+	elif y1 - y0 < 1.5:
+		# 雙手短柄：大鎚頭
+		_box(wpn, n + "_Head", Vector3(0.30, 0.16, 0.16), Vector3(0, y1, 0), C_STEEL_DARK)
+		_box(wpn, n + "_Band", Vector3(0.32, 0.05, 0.17), Vector3(0, y1, 0), C_STEEL)
+	else:
+		# 雙手長柄：戰鎚（一邊平頭、一邊尖刺、頂上一根刺）
+		_box(wpn, n + "_Head", Vector3(0.16, 0.10, 0.10), Vector3(0.06, y1, 0), C_STEEL)
+		_cyl(wpn, n + "_Beak", 0.0, 0.04, 0.16, Vector3(-0.09, y1, 0), C_STEEL_DARK, Vector3(0, 0, -90), 4)
+		_cyl(wpn, n + "_Top", 0.0, 0.03, 0.16, Vector3(0, y1 + 0.12, 0), C_STEEL_DARK, Vector3.ZERO, 4)
+
+
+## 弓握在左手：弓身沿左手的 Z（手臂往前平伸時 = 垂直），弓梢與弦往射手那側（手的 +Y）彎
+static func _build_bow(hand_l: Node3D) -> void:
+	var bow := _joint(hand_l, "BowMount", Vector3(0, -0.04, 0))
+	_box(bow, "Bow_Grip", Vector3(0.045, 0.06, 0.12), Vector3.ZERO, C_LEATHER_DARK)
+	for sgn in [1.0, -1.0]:
+		var limb := _joint(bow, "BowLimb%s" % ("U" if sgn > 0.0 else "D"), Vector3(0, 0, 0.05 * sgn))
+		limb.rotation_degrees = Vector3(-16.0 * sgn, 0, 0)
+		_box(limb, "Bow_Limb%s" % ("U" if sgn > 0.0 else "D"), Vector3(0.035, 0.04, 0.58), Vector3(0, 0, 0.29 * sgn), C_WOOD)
+	_box(bow, "Bow_String", Vector3(0.008, 0.008, 1.18), Vector3(0, 0.17, 0), Color(0.9, 0.88, 0.8))
+	# 搭在弓上的箭：箭頭朝前（手的 -Y），箭尾往射手
+	_cyl(bow, "Bow_Arrow", 0.008, 0.008, 0.78, Vector3(0, 0.2, 0.0), C_WOOD)
+	_cyl(bow, "Bow_ArrowHead", 0.0, 0.025, 0.08, Vector3(0, -0.22, 0.0), C_STEEL, Vector3(180, 0, 0), 4)
+	_box(bow, "Bow_Fletch", Vector3(0.004, 0.12, 0.05), Vector3(0, 0.54, 0.0), Color(0.9, 0.9, 0.85))
 
 
 static func _knight_arms_ready() -> Dictionary:
@@ -641,4 +720,145 @@ static func _horse_gallop(t: float) -> Dictionary:
 	p["Neck"] = [Vector3(48 - 8.0 * sin(ph), 0, 0)]
 	p["HeadJ"] = [Vector3(52, 0, 0)]
 	p["Tail"] = [Vector3(-120 + 8.0 * sin(ph), 0, 0)]
+	return p
+
+
+# ---------------------------------------------------------------------------
+# 第四輪：雙手武器與弓
+# ---------------------------------------------------------------------------
+## 雙手揮砍：跟單手揮砍同一條軌跡，但身體扭得更多、左手跟著握在柄上
+static func _heavy_keys(side: float, low: float) -> Array:
+	var keys := _swing_keys(side, low)
+	var out := []
+	for k in keys:
+		var d: Dictionary = (k[1] as Dictionary).duplicate()
+		var sp: Vector3 = d["Spine"][0]
+		d["Spine"] = [Vector3(sp.x + 6, sp.y * 1.35, 0)]
+		var sh: Vector3 = d["ShoulderR"][0]
+		var el: Vector3 = d["ElbowR"][0]
+		d["ShoulderL"] = [Vector3(sh.x + 4, sh.y + 18.0 * side, -30)]
+		d["ElbowL"] = [Vector3(el.x - 12, 0, 0)]
+		d["HandL"] = [Vector3(20, 0, 0)]
+		out.append([k[0], d])
+	return out
+
+
+static func _heavy_legs() -> Dictionary:
+	var legs := _knight_legs_stand()
+	legs["LegL"] = [Vector3(-24, 0, 6)]
+	legs["LegR"] = [Vector3(16, 0, -6)]
+	legs["KneeL"] = [Vector3(20, 0, 0)]
+	legs["KneeR"] = [Vector3(14, 0, 0)]
+	legs["Hips"] = [Vector3(0, 0, 0), Vector3(0, -0.07, 0)]
+	return legs
+
+
+static func _knight_heavy_a(t: float) -> Dictionary:
+	return _merge(_heavy_legs(), _keyed(_heavy_keys(1.0, 0.0), t))
+
+
+static func _knight_heavy_b(t: float) -> Dictionary:
+	return _merge(_heavy_legs(), _keyed(_heavy_keys(-1.0, 0.0), t))
+
+
+static func _knight_walk_heavy_a(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _keyed(_heavy_keys(1.0, 0.0), t))
+
+
+static func _knight_walk_heavy_b(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _keyed(_heavy_keys(-1.0, 0.0), t))
+
+
+static func _knight_ride_heavy_a(t: float) -> Dictionary:
+	return _merge(_knight_legs_ride(), _keyed(_heavy_keys(1.0, 22.0), t))
+
+
+static func _knight_ride_heavy_b(t: float) -> Dictionary:
+	return _merge(_knight_legs_ride(), _keyed(_heavy_keys(-1.0, 22.0), t))
+
+
+## 用武器格擋：雙手把武器斜舉在身前
+static func _parry_arms() -> Dictionary:
+	return {
+		"ShoulderR": [Vector3(-70, 25, -6)],
+		"ElbowR": [Vector3(-55, 0, 0)],
+		"HandR": [Vector3(35, 0, 55)],
+		"ShoulderL": [Vector3(-66, 40, -30)],
+		"ElbowL": [Vector3(-60, 0, 0)],
+		"HandL": [Vector3(20, 0, 0)],
+		"Spine": [Vector3(6, 6, 0)],
+		"Head": [Vector3(4, -4, 0)],
+	}
+
+
+static func _knight_parry(t: float) -> Dictionary:
+	var p := _merge(_knight_legs_stand(), _parry_arms())
+	p["LegL"] = [Vector3(-14, 0, 5)]
+	p["KneeL"] = [Vector3(14, 0, 0)]
+	p["KneeR"] = [Vector3(12, 0, 0)]
+	p["Hips"] = [Vector3.ZERO, Vector3(0, -0.05 - 0.01 * sin(t * TAU), 0)]
+	return p
+
+
+static func _knight_walk_parry(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _parry_arms())
+
+
+static func _knight_ride_parry(t: float) -> Dictionary:
+	var p := _merge(_knight_legs_ride(), _parry_arms())
+	p["Spine"] = [Vector3(4 + 1.0 * sin(t * TAU), 6, 0)]
+	return p
+
+
+## 弓的姿勢：draw = 0（弓放低）→ 1（拉滿）。身體側轉，左手平伸持弓，右手把弦拉到下巴
+static func _bow_pose(draw: float, release := 0.0) -> Dictionary:
+	var ready := _knight_arms_ready()
+	var aim := {
+		"Spine": [Vector3(2, -38, 0)],
+		"Head": [Vector3(0, 34, 0)],
+		"ShoulderL": [Vector3(-86, 38, 0)],
+		"ElbowL": [Vector3(-4, 0, 0)],
+		"HandL": [Vector3(0, 0, 0)],
+		"ShoulderR": [Vector3(-84, 70, -10)],
+		"ElbowR": [Vector3(-140, 0, 0)],
+		"HandR": [Vector3(0, 0, 0)],
+	}
+	var nock := aim.duplicate()
+	nock["ShoulderR"] = [Vector3(-80, 40, -10)]
+	nock["ElbowR"] = [Vector3(-60, 0, 0)]
+	var p: Dictionary
+	if draw < 0.5:
+		p = _keyed([[0.0, ready], [1.0, nock]], draw * 2.0)
+	else:
+		p = _keyed([[0.0, nock], [1.0, aim]], (draw - 0.5) * 2.0)
+	if release > 0.0:
+		# 放箭：右手往後彈開
+		var r := sin(minf(release / 0.3, 1.0) * PI * 0.5)
+		p["ShoulderR"] = [Vector3(-84, 70 + 25.0 * r, -10 - 20.0 * r)]
+		p["ElbowR"] = [Vector3(-140 + 60.0 * r, 0, 0)]
+	return p
+
+
+static func _knight_bow_draw(t: float) -> Dictionary:
+	return _merge(_knight_legs_stand(), _bow_pose(t))
+
+
+static func _knight_bow_release(t: float) -> Dictionary:
+	return _merge(_knight_legs_stand(), _bow_pose(1.0, t))
+
+
+## 士兵弓兵一次射擊：前 2/3 拉弓、放箭、收回
+static func _knight_bow_shoot(t: float) -> Dictionary:
+	if t < 0.66:
+		return _merge(_knight_legs_stand(), _bow_pose(t / 0.66))
+	return _merge(_knight_legs_stand(), _bow_pose(1.0, (t - 0.66) / 0.34))
+
+
+static func _knight_walk_bow(t: float) -> Dictionary:
+	return _merge(_walk_legs(t), _bow_pose(1.0))
+
+
+static func _knight_ride_bow(t: float) -> Dictionary:
+	var p := _merge(_knight_legs_ride(), _bow_pose(1.0))
+	p["Spine"] = [Vector3(2 + 1.0 * sin(t * TAU), -38, 0)]
 	return p

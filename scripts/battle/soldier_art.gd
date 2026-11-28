@@ -127,8 +127,11 @@ func _try_baked(ut: int) -> bool:
 			return false
 		_compose_cavalry(horse, knight)
 	else:
+		# 步兵：長槍＋盾；弓兵：弓（沒有盾）。舊的烘焙圖沒有弓／盾圖層時退回劍
 		var weapon := "spear" if ut == PlaceholderArt.Unit.INFANTRY and knight.has_layer("spear") else "sword"
-		_compose_foot(knight, weapon)
+		if ut == PlaceholderArt.Unit.ARCHER and knight.has_layer("bow") and knight.has_action("bow_shoot"):
+			weapon = "bow"
+		_compose_foot(knight, weapon, weapon != "bow")
 	baked = true
 	return true
 
@@ -144,13 +147,16 @@ static func _mask_image(bs: BakedSpriteSet, layer: String) -> Image:
 
 
 ## 步兵／弓兵：同一組圖的 idle、walk、run、attack_a、death 五個動作，身體＋武器壓成一張
-func _compose_foot(bs: BakedSpriteSet, weapon: String) -> void:
+func _compose_foot(bs: BakedSpriteSet, weapon: String, with_shield := true) -> void:
 	frame = bs.frame_size
 	pixel_size = bs.pixel_size
 	origin = bs.origin
 	# 邊走邊攻擊：下半身繼續走路、上半身出手（步兵拿長槍用刺擊，弓兵拿劍用揮砍）
 	var atk := "thrust" if weapon == "spear" and bs.has_action("thrust") else "attack_a"
 	var watk := "walk_thrust" if weapon == "spear" else "walk_attack_a"
+	if weapon == "bow":
+		atk = "bow_shoot"
+		watk = ""
 	var pick := ["idle", "walk", "run", atk, "death"]
 	var names := ["idle", "walk", "run", "attack", "death"]
 	if bs.has_action(watk):
@@ -165,6 +171,8 @@ func _compose_foot(bs: BakedSpriteSet, weapon: String) -> void:
 	var body := _layer_image(bs, "body")
 	var body_mask := _mask_image(bs, "body")
 	var wpn := _layer_image(bs, weapon)
+	var shield: Image = _layer_image(bs, "shield") if with_shield and bs.has_layer("shield") else null
+	var shield_mask: Image = _mask_image(bs, "shield") if shield else null
 	var r := 0
 	for k in pick.size():
 		var a: Dictionary = bs.actions[pick[k]]
@@ -174,6 +182,11 @@ func _compose_foot(bs: BakedSpriteSet, weapon: String) -> void:
 		_rgba.blit_rect(body, src, dst)
 		if body_mask:
 			_mask.blit_rect(body_mask, src, dst)
+		if shield:
+			_rgba.blend_rect(shield, src, dst)
+			_clear_mask_under(shield, src, dst)
+			if shield_mask:
+				_mask.blit_rect_mask(shield_mask, shield, src, dst)
 		_rgba.blend_rect(wpn, src, dst)
 		_clear_mask_under(wpn, src, dst)
 		actions[names[k]] = [r, n, float(a["fps"]), bool(a["loop"])]
@@ -233,6 +246,8 @@ func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet) -> void:
 	var k_body := _layer_image(knight, "body")
 	var k_mask := _mask_image(knight, "body")
 	var k_wpn := _layer_image(knight, "spear" if knight.has_layer("spear") else "sword")
+	var k_sh: Image = _layer_image(knight, "shield") if knight.has_layer("shield") else null
+	var k_sh_mask: Image = _mask_image(knight, "shield") if k_sh else null
 	var hfs := horse.frame_size
 	var kfs := knight.frame_size
 	for r in plan.size():
@@ -259,5 +274,10 @@ func _compose_cavalry(horse: BakedSpriteSet, knight: BakedSpriteSet) -> void:
 			_rgba.blend_rect(k_body, ksrc, kdst)
 			if k_mask:
 				_mask.blit_rect_mask(k_mask, k_body, ksrc, kdst)
+			if k_sh:
+				_rgba.blend_rect(k_sh, ksrc, kdst)
+				_clear_mask_under(k_sh, ksrc, kdst)
+				if k_sh_mask:
+					_mask.blit_rect_mask(k_sh_mask, k_sh, ksrc, kdst)
 			_rgba.blend_rect(k_wpn, ksrc, kdst)
 			_clear_mask_under(k_wpn, ksrc, kdst)

@@ -1,7 +1,10 @@
 {
   "name": "knight",
   "source": "builtin:knight",
-  "frame_size": [88, 88],
+  "frame_size": [
+    88,
+    88
+  ],
   "pixel_size": 0.045,
   "pitch_deg": 30,
   "supersample": 4,
@@ -10,9 +13,347 @@
   "outline": true,
   "color_levels": 24,
   "layers": [
-    {"name": "body", "include": ["*"], "exclude": ["Sword*", "Spear*"], "team": ["*Team*"]},
-    {"name": "sword", "include": ["Sword*"]},
-    {"name": "spear", "include": ["Spear*"], "default_visible": false}
+    {
+      "name": "body",
+      "include": [
+        "*"
+      ],
+      "exclude": [
+        "Sword*",
+        "Spear*",
+        "GSword*",
+        "Axe*",
+        "Mace*",
+        "Bow*",
+        "Shield*"
+      ],
+      "team": [
+        "*Team*"
+      ]
+    },
+    {
+      "name": "shield",
+      "include": [
+        "Shield*"
+      ],
+      "team": [
+        "*Team*"
+      ],
+      "skip_actions": [
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ]
+    },
+    {
+      "name": "sword",
+      "include": [
+        "Sword*"
+      ],
+      "occluded_by": [
+        "body",
+        "shield"
+      ],
+      "skip_actions": [
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ]
+    },
+    {
+      "name": "spear",
+      "include": [
+        "Spear*"
+      ],
+      "occluded_by": [
+        "body",
+        "shield"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "greatsword",
+      "include": [
+        "GSword*"
+      ],
+      "occluded_by": [
+        "body"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "block",
+        "walk_block",
+        "ride_block",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "axe_hs",
+      "include": [
+        "AxeHS*"
+      ],
+      "occluded_by": [
+        "body",
+        "shield"
+      ],
+      "skip_actions": [
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "axe_hl",
+      "include": [
+        "AxeHL*"
+      ],
+      "occluded_by": [
+        "body",
+        "shield"
+      ],
+      "skip_actions": [
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "axe_ts",
+      "include": [
+        "AxeTS*"
+      ],
+      "occluded_by": [
+        "body"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "block",
+        "walk_block",
+        "ride_block",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "axe_tl",
+      "include": [
+        "AxeTL*"
+      ],
+      "occluded_by": [
+        "body"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "block",
+        "walk_block",
+        "ride_block",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "mace_hs",
+      "include": [
+        "MaceHS*"
+      ],
+      "occluded_by": [
+        "body",
+        "shield"
+      ],
+      "skip_actions": [
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "mace_hl",
+      "include": [
+        "MaceHL*"
+      ],
+      "occluded_by": [
+        "body",
+        "shield"
+      ],
+      "skip_actions": [
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "mace_ts",
+      "include": [
+        "MaceTS*"
+      ],
+      "occluded_by": [
+        "body"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "block",
+        "walk_block",
+        "ride_block",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "mace_tl",
+      "include": [
+        "MaceTL*"
+      ],
+      "occluded_by": [
+        "body"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "block",
+        "walk_block",
+        "ride_block",
+        "bow_*",
+        "walk_bow",
+        "ride_bow"
+      ],
+      "default_visible": false
+    },
+    {
+      "name": "bow",
+      "include": [
+        "Bow*"
+      ],
+      "occluded_by": [
+        "body"
+      ],
+      "skip_actions": [
+        "attack_a",
+        "attack_b",
+        "walk_attack_*",
+        "ride_attack_*",
+        "thrust",
+        "walk_thrust",
+        "ride_thrust",
+        "heavy_*",
+        "walk_heavy_*",
+        "ride_heavy_*",
+        "parry",
+        "walk_parry",
+        "ride_parry",
+        "block",
+        "walk_block",
+        "ride_block"
+      ],
+      "default_visible": false
+    }
   ],
   "anchors": {
     "seat": "Seat",
@@ -21,26 +362,211 @@
     "head": "HeadTop"
   },
   "actions": [
-    {"name": "idle", "frames": 2, "fps": 2, "loop": true},
-    {"name": "walk", "frames": 6, "fps": 8, "loop": true},
-    {"name": "run", "frames": 6, "fps": 11, "loop": true},
-    {"name": "attack_a", "frames": 6, "fps": 12, "loop": false},
-    {"name": "attack_b", "frames": 6, "fps": 12, "loop": false},
-    {"name": "death", "frames": 4, "fps": 8, "loop": false},
-    {"name": "ride_idle", "frames": 2, "fps": 2, "loop": true},
-    {"name": "ride_attack_a", "frames": 6, "fps": 12, "loop": false},
-    {"name": "ride_attack_b", "frames": 6, "fps": 12, "loop": false},
-    {"name": "walk_attack_a", "frames": 6, "fps": 12, "loop": false},
-    {"name": "walk_attack_b", "frames": 6, "fps": 12, "loop": false},
-    {"name": "thrust", "frames": 6, "fps": 12, "loop": false},
-    {"name": "walk_thrust", "frames": 6, "fps": 12, "loop": false},
-    {"name": "block", "frames": 2, "fps": 2, "loop": true},
-    {"name": "walk_block", "frames": 6, "fps": 8, "loop": true},
-    {"name": "hurt", "frames": 3, "fps": 10, "loop": false},
-    {"name": "ride_block", "frames": 2, "fps": 2, "loop": true},
-    {"name": "ride_thrust", "frames": 6, "fps": 12, "loop": false}
+    {
+      "name": "idle",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    },
+    {
+      "name": "walk",
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    {
+      "name": "run",
+      "frames": 6,
+      "fps": 11,
+      "loop": true
+    },
+    {
+      "name": "attack_a",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "attack_b",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "death",
+      "frames": 4,
+      "fps": 8,
+      "loop": false
+    },
+    {
+      "name": "ride_idle",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    },
+    {
+      "name": "ride_attack_a",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "ride_attack_b",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "walk_attack_a",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "walk_attack_b",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "thrust",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "walk_thrust",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "block",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    },
+    {
+      "name": "walk_block",
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    {
+      "name": "hurt",
+      "frames": 3,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "ride_block",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    },
+    {
+      "name": "ride_thrust",
+      "frames": 6,
+      "fps": 12,
+      "loop": false
+    },
+    {
+      "name": "heavy_a",
+      "frames": 6,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "heavy_b",
+      "frames": 6,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "walk_heavy_a",
+      "frames": 6,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "walk_heavy_b",
+      "frames": 6,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "ride_heavy_a",
+      "frames": 6,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "ride_heavy_b",
+      "frames": 6,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "parry",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    },
+    {
+      "name": "walk_parry",
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    {
+      "name": "ride_parry",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    },
+    {
+      "name": "bow_draw",
+      "frames": 4,
+      "fps": 8,
+      "loop": false
+    },
+    {
+      "name": "bow_release",
+      "frames": 3,
+      "fps": 10,
+      "loop": false
+    },
+    {
+      "name": "bow_shoot",
+      "frames": 6,
+      "fps": 8,
+      "loop": false
+    },
+    {
+      "name": "walk_bow",
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    {
+      "name": "ride_bow",
+      "frames": 2,
+      "fps": 2,
+      "loop": true
+    }
   ],
   "holdouts": [
-    {"source": "builtin:horse", "anim": "idle", "time": 0.0, "align": ["Seat", "Saddle"], "actions": ["ride_*"]}
+    {
+      "source": "builtin:horse",
+      "anim": "idle",
+      "time": 0.0,
+      "align": [
+        "Seat",
+        "Saddle"
+      ],
+      "actions": [
+        "ride_*"
+      ]
+    }
   ]
 }
