@@ -41,9 +41,8 @@ const U_NAMES := ["步兵", "弓兵", "騎兵", "劍盾兵"]
 const SWORD_COOLDOWN := Vector2(0.85, 1.25)
 const SWORD_BLOCK_CHANCE := 0.4        # 正面近戰被盾擋下的機率
 const SWORD_ARROW_MULT := 0.5          # 正面中箭的傷害倍率
-## 雲梯上腳步不穩：爬梯的人出手傷害 ×0.6、被打傷害 ×1.3
-const LADDER_DEAL_MULT := 0.6
-const LADDER_TAKE_MULT := 1.3
+## 雲梯上腳步不穩：爬梯的人出手傷害 ×0.8（被打不加傷害）
+const LADDER_DEAL_MULT := 0.8
 
 # 弓兵
 const ARCHER_RANGE := 42.0
@@ -822,8 +821,6 @@ func _move_and_fight(delta: float) -> void:
 					if siege != null:
 						if lvl[i] == 2:
 							dmg *= LADDER_DEAL_MULT
-						if tg >= 0 and lvl[tg] == 2:
-							dmg *= LADDER_TAKE_MULT
 					var shield_block := tg >= 0 and utype[tg] == UnitType.SWORDSMAN and stun[tg] <= 0.0 \
 							and facing[tg].dot(-face) > 0.3 and rng.randf() < SWORD_BLOCK_CHANCE
 					if shield_block:
