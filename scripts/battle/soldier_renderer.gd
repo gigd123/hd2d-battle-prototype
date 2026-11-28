@@ -19,6 +19,8 @@ var _arts: Array[SoldierArt] = []
 
 func setup(bm: BattleManager) -> void:
 	_n = bm.count
+	_gone = PackedByteArray()
+	_culled = PackedByteArray()
 	_arts.clear()
 	_arts.resize(UnitDefs.count())
 	for i in bm.count:
@@ -28,6 +30,12 @@ func setup(bm: BattleManager) -> void:
 	_create(bm)
 	_setup_shadows(_n)
 	_setup_arrows()
+
+
+## 1 = 屍體已消失、已隱藏，之後每幀直接跳過
+var _gone := PackedByteArray()
+var _shadow_buf := PackedFloat32Array()
+var _culled := PackedByteArray()        # 1 = 在鏡頭後方、已隱藏
 
 
 func _create(_bm: BattleManager) -> void:
@@ -50,13 +58,42 @@ func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 	var dir_count := GameConfig.direction_count()
 	var mirror := GameConfig.mirror_enabled()
 	var now := bm.battle_time
-	var shadow_buf := _shadow_mm.buffer if (_shadow_mm and _n > 0) else PackedFloat32Array()
+	# 陰影緩衝區自己保留一份（讀 MultiMesh.buffer 會向繪圖伺服器要資料，很慢）
+	var shadow_buf := _shadow_buf
+	_shadow_buf = PackedFloat32Array()      # 暫時放掉成員的參照，寫入時才不會整塊複製
+	if _gone.size() != _n:
+		_gone.resize(_n)
+		_gone.fill(0)
+	# 人多時士兵分兩組輪流更新，各組的內插比例不同（見 BattleManager.interp_fraction）
+	var fr0 := bm.interp_fraction(0)
+	var fr1 := bm.interp_fraction(1)
+	var two := bm.sim_div > 1
+	# 鏡頭後方的士兵看不到：只在剛轉到後方時隱藏一次，之後跳過所有計算
+	if _culled.size() != _n:
+		_culled.resize(_n)
+		_culled.fill(0)
+	var cam_pos := cam.global_position
+	var cam_fwd := -cam_basis.z
 	for i in _n:
+		if _gone[i] == 1:
+			continue                   # 屍體已經消失：不用再算（以前每幀都會重算所有陣亡者）
 		var st := bm.state[i]
 		var ut := bm.utype[i]
-		var p := bm.prev_pos[i].lerp(bm.pos[i], frac)
+		var p := bm.prev_pos[i].lerp(bm.pos[i], fr1 if (two and (i & 1) == 1) else fr0)
 		var dead := st == BattleManager.State.DEAD
 		var visible_now := not dead or (now - bm.dead_time[i]) < bm.corpse_time
+		if not visible_now:
+			_gone[i] = 1
+			_draw_soldier(i, p, 0, false, 0.0, 1.0, false)
+			shadow_buf[i * 12 + 7] = -10000.0
+			continue
+		if (p.x - cam_pos.x) * cam_fwd.x + (p.y - cam_pos.y) * cam_fwd.y + (p.z - cam_pos.z) * cam_fwd.z < -2.0:
+			if _culled[i] == 0:
+				_culled[i] = 1
+				_draw_soldier(i, p, 0, false, 0.0, 0.0, false)
+				shadow_buf[i * 12 + 7] = -10000.0
+			continue
+		_culled[i] = 0
 		var dir := DirectionUtil.resolve_with(bm.facing[i], cam_basis, dir_count, mirror)
 		var art: SoldierArt = _arts[bm.lo[i]]
 		var anim := bm.atk_anim[i]
@@ -89,6 +126,7 @@ func render(bm: BattleManager, cam: Camera3D, frac: float) -> void:
 			shadow_buf[o + 11] = p.z
 		else:
 			shadow_buf[o + 7] = -10000.0
+	_shadow_buf = shadow_buf
 	if _shadow_mm and _n > 0:
 		_shadow_mm.buffer = shadow_buf
 	_render_arrows(bm)
@@ -165,6 +203,7 @@ func _setup_shadows(n: int) -> void:
 		buf[o + 5] = 1.0
 		buf[o + 10] = 1.0
 		buf[o + 7] = -10000.0
+	_shadow_buf = buf
 	if n > 0:
 		_shadow_mm.buffer = buf
 	_shadow_mmi = MultiMeshInstance3D.new()

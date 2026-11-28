@@ -48,6 +48,8 @@ var siege_side := -1
 ## 野戰的戰鬥設定（初始選單填寫；直接開戰場時用預設值）。見 BattleSetup
 var setup: BattleSetup
 ## 展示影片腳本（--scenario）沿用改版前的固定佈陣，鏡頭腳本才對得上
+## 開發用：關掉「人多時士兵分兩組輪流更新」（--no-sim-split），比較效能與結果
+var no_sim_split := false
 var legacy_layout := false
 ## 從初始選單進入戰場（結算畫面才有「回選單」可用）
 var from_menu := false
@@ -113,6 +115,8 @@ func _parse_dev_args() -> void:
 			full_billboard = true
 		elif a == "--debug-draw":
 			debug_draw = true
+		elif a == "--no-sim-split":
+			no_sim_split = true
 		elif a.begins_with("--siege="):
 			siege_mode = true
 			siege_side = 1 if a.get_slice("=", 1) == "defend" else 0

@@ -33,6 +33,8 @@ func _ready() -> void:
 		GameConfig.terrain_type = setup.terrain_type
 		spectator = setup.player_side < 0
 	seed(GameConfig.battle_seed)
+	# 電腦跟不上時最多一幀補 3 個物理步（預設 8）：寧可遊戲時間稍微變慢，也不要越補越卡的連鎖延遲
+	Engine.max_physics_steps_per_frame = 3
 	_build_environment()
 	terrain = BattleTerrain.new()
 	terrain.name = "Terrain"

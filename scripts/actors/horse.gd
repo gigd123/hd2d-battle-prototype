@@ -9,8 +9,11 @@ extends CharacterBody3D
 
 @export var trot_speed := 8.4
 @export var gallop_speed := 16.8
-@export var accel := 5.0
-@export var brake := 9.0
+@export var accel := 5.0              # 低速時的加速度（m/s²）；越接近極速加速越慢
+@export var accel_top := 1.6           # 接近極速時的加速度
+@export var sprint_accel_mult := 1.5   # 按住 Shift 時加速度倍率（踢馬加速）
+@export var coast_decel := 2.2         # 放開前進後自然減速（m/s²），慢慢停下
+@export var brake := 9.0               # 按後退時的煞車
 @export var turn_rate_slow := 2.8      # 低速時每秒可轉的弧度
 @export var turn_rate_fast := 1.1      # 全速時每秒可轉的弧度
 @export var sharp_turn_angle := 1.6    # 超過這個角度差就減速（弧度）
@@ -141,7 +144,8 @@ func _physics_process(delta: float) -> void:
 		var tr := lerpf(turn_rate_slow, turn_rate_fast, t)
 		heading = wrapf(heading + clampf(diff, -tr * delta, tr * delta), -PI, PI)
 		if _input.y > 0.1:
-			target_speed = (gallop_speed if _sprint else trot_speed) * minf(_input.y, 1.0)
+			# 按住前進：一路加速到極速（不必按 Shift）；放開才慢慢減速
+			target_speed = gallop_speed * minf(_input.y, 1.0)
 			if absf(diff) > sharp_turn_angle:
 				target_speed = minf(target_speed, trot_speed * 0.4)
 		elif _input.y < -0.1:
@@ -164,7 +168,13 @@ func _physics_process(delta: float) -> void:
 		if terrain:
 			var hf := forward()
 			target_speed *= terrain.move_factor(global_position.x, global_position.z, hf.x, hf.z)
-	var rate := accel if absf(target_speed) > absf(speed) and target_speed * speed >= 0.0 else brake
+	var rate := brake
+	if absf(target_speed) > absf(speed) and target_speed * speed >= 0.0:
+		# 加速：低速時快、接近極速時慢（越騎越快的感覺）
+		var k := clampf(absf(speed) / gallop_speed, 0.0, 1.0)
+		rate = lerpf(accel, accel_top, k * k) * (sprint_accel_mult if _sprint else 1.0)
+	elif target_speed == 0.0 and speed > 0.0:
+		rate = coast_decel             # 放開前進：慢慢降速，不是瞬間煞住（按後退才是煞車）
 	speed = move_toward(speed, target_speed, rate * delta)
 	side = move_toward(side, target_side, (accel if absf(target_side) > absf(side) else brake) * delta)
 
