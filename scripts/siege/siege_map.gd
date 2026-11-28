@@ -19,7 +19,7 @@ const WALL_H := 6.5            # 牆頂高度（相對地面基準）
 const PARAPET_H := 1.15        # 女兒牆高度
 const GATE_HALF := 2.5         # 城門半寬（|z| < 2.5）
 const GATE_TUNNEL_H := 4.9     # 城門洞高度
-const GATE_HP := 2400.0
+const GATE_HP := 3200.0
 const LADDER_Z := [-30.0, -14.0, 18.0]
 const LADDER_RUN := 3.4        # 雲梯水平長度（梯腳 x = WALL_X0 - LADDER_RUN）
 const LADDER_HALF := 0.7       # 雲梯半寬

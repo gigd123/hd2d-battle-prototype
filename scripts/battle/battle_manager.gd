@@ -23,20 +23,26 @@ signal siege_event(text: String)                               # 攻城戰的戰
 enum State { IDLE, MOVE, ENGAGE, DEAD }
 enum Order { HOLD, FOLLOW, CHARGE }
 ## 兵種（與 PlaceholderArt.Unit 相同順序）
-enum UnitType { INFANTRY, ARCHER, CAVALRY }
+enum UnitType { INFANTRY, ARCHER, CAVALRY, SWORDSMAN }
 
 # --- 兵種數值表（索引 = UnitType）。原型暫定值，待遊玩調整 ---
-const U_WALK := [3.0, 3.0, 5.0]
-const U_RUN := [4.2, 4.0, 9.5]
-const U_HP := [100.0, 70.0, 150.0]
-const U_REACH := [2.1, 1.4, 2.0]      # 步兵拿長槍，比拿劍的弓兵搆得遠
+const U_WALK := [3.0, 3.0, 5.0, 3.0]
+const U_RUN := [4.2, 4.0, 9.5, 4.2]
+const U_HP := [100.0, 70.0, 150.0, 100.0]
+const U_REACH := [2.1, 1.4, 2.0, 1.5] # 步兵拿長槍，比拿劍的弓兵、劍盾兵搆得遠
 const SPEAR_MIN_DIST := 1.0           # 長槍步兵：目標比這更近 → 往後退一點拉開距離，傷害減半
-const U_DMG_MIN := [9.0, 5.0, 11.0]
-const U_DMG_MAX := [14.0, 8.0, 16.0]
-const U_RADIUS := [0.38, 0.38, 0.75]
-const U_HEIGHT := [1.8, 1.8, 2.5]
-const U_SPACING := [1.4, 1.4, 2.4]       # 隊形間距
-const U_NAMES := ["步兵", "弓兵", "騎兵"]
+const U_DMG_MIN := [9.0, 5.0, 11.0, 10.0]
+const U_DMG_MAX := [14.0, 8.0, 16.0, 15.0]
+const U_RADIUS := [0.38, 0.38, 0.75, 0.38]
+const U_HEIGHT := [1.8, 1.8, 2.5, 1.8]
+const U_SPACING := [1.4, 1.4, 2.4, 1.4]       # 隊形間距
+const U_NAMES := ["步兵", "弓兵", "騎兵", "劍盾兵"]
+## 劍盾兵（目前只有攻城戰守方用）：出手比長槍快，正面的盾有機率擋下近戰、減少箭傷
+const SWORD_COOLDOWN := Vector2(0.85, 1.25)
+const SWORD_BLOCK_CHANCE := 0.4        # 正面近戰被盾擋下的機率
+const SWORD_ARROW_MULT := 0.5          # 正面中箭的傷害倍率
+## 雲梯上腳步不穩：爬梯的人出手傷害 ×0.8（被打不加傷害）
+const LADDER_DEAL_MULT := 0.8
 
 # 弓兵
 const ARCHER_RANGE := 42.0
@@ -774,7 +780,7 @@ func _move_and_fight(delta: float) -> void:
 						# 出手：蓄力 0.25 秒後結算
 						atk_anim[i] = 0.45
 						atk_hit_at[i] = 0.25
-						atk_cooldown[i] = rng.randf_range(1.2, 1.8)
+						atk_cooldown[i] = rng.randf_range(SWORD_COOLDOWN.x, SWORD_COOLDOWN.y) if ut == UnitType.SWORDSMAN else rng.randf_range(1.2, 1.8)
 		if use_slot:
 			var sq_i := squad[i]
 			var order := squad_order[sq_i]
@@ -812,12 +818,20 @@ func _move_and_fight(delta: float) -> void:
 					var dmg := rng.randf_range(U_DMG_MIN[ut], U_DMG_MAX[ut])
 					if ut == UnitType.INFANTRY and Vector2(tp2.x - p.x, tp2.z - p.z).length() < SPEAR_MIN_DIST:
 						dmg *= 0.5
-					if tg == TARGET_PLAYER:
-						player.take_damage(dmg, p)
+					if siege != null:
+						if lvl[i] == 2:
+							dmg *= LADDER_DEAL_MULT
+					var shield_block := tg >= 0 and utype[tg] == UnitType.SWORDSMAN and stun[tg] <= 0.0 \
+							and facing[tg].dot(-face) > 0.3 and rng.randf() < SWORD_BLOCK_CHANCE
+					if shield_block:
+						soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), false)
 					else:
-						if apply_damage(tg, dmg, face * 0.15):
-							dbg_melee_kills[team[i]] += 1
-					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), true)
+						if tg == TARGET_PLAYER:
+							player.take_damage(dmg, p)
+						else:
+							if apply_damage(tg, dmg, face * 0.15):
+								dbg_melee_kills[team[i]] += 1
+						soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), true)
 				else:
 					soldier_struck.emit(p + face * 0.6 + Vector3(0, 1.2, 0), false)
 
@@ -979,6 +993,9 @@ func _move_and_fight(delta: float) -> void:
 func _fire_arrow(i: int, p: Vector3, tg: int, d: float) -> void:
 	var start := p + Vector3(0, 1.5, 0)
 	var tp := _target_pos(tg)
+	if siege != null and lvl[i] == 1 and p.x < SiegeMap.WALL_X1 and tp.x < SiegeMap.WALL_X0:
+		# 牆頂弓兵探出城垛往下射：箭從女兒牆外側出發，射得到牆腳
+		start.x = SiegeMap.WALL_X0 - 0.2
 	var tvel := vel[tg] if tg >= 0 else player.move_velocity()
 	var flight := clampf(d / ARROW_SPEED, 0.45, 2.0)
 	var aim_h := 1.0
@@ -1091,6 +1108,8 @@ func _step_arrow(k: int, delta: float, g: Vector3, pl_ok: bool, pl_center: Vecto
 			var cover := 1.0
 			if siege != null and lvl[hit] == 1 and pos[hit].x < SiegeMap.WALL_X1:
 				cover = SIEGE_WALL_ARROW_MULT
+			if utype[hit] == UnitType.SWORDSMAN and facing[hit].dot(-flat) > 0.3:
+				cover *= SWORD_ARROW_MULT
 			if apply_damage(hit, rng.randf_range(ARROW_DAMAGE_MIN, ARROW_DAMAGE_MAX) * arrow_mult[k] * cover, flat * 0.25):
 				dbg_arrow_kills[tm] += 1
 		arrow_state[k] = 0
@@ -1309,7 +1328,7 @@ func _process(_delta: float) -> void:
 # 攻城戰
 # ---------------------------------------------------------------------------
 ## 牆頂守軍有城垛掩護：受到的箭傷乘上這個倍率
-const SIEGE_WALL_ARROW_MULT := 0.6
+const SIEGE_WALL_ARROW_MULT := 0.5
 var _obj_zone := 0                      # _siege_objective() 的附帶結果：目標點所在區域
 
 
@@ -1345,13 +1364,10 @@ func _siege_can_target(i: int, j: int) -> bool:
 	var zj := siege.zone_of(lvl[j], pos[j].x)
 	if utype[i] == UnitType.CAVALRY and (zj == SiegeMap.Zone.WALL or zj == SiegeMap.Zone.LADDER):
 		return false
-	if team[i] != siege_attacker and utype[i] == UnitType.ARCHER and lvl[i] == 1 and zj != SiegeMap.Zone.WALL:
-		# 牆頂弓兵不射正下方（箭會被牆擋住），改射離牆遠一點的人
-		return pos[j].x < SiegeMap.WALL_X0 - 5.0 or pos[j].x > SiegeMap.WALL_X1
 	if team[i] == siege_attacker or utype[i] == UnitType.ARCHER or sortie:
 		return true
 	if zj == SiegeMap.Zone.OUT:
-		return siege.gate_broken and pos[j].x > SiegeMap.WALL_X0 - 14.0 and absf(pos[j].z) < 16.0
+		return false            # 守方近戰不出城（城門破了也是在門內列陣堵門）
 	if zj == SiegeMap.Zone.LADDER:
 		return pos[j].y > siege.wall_top() - 2.6
 	return true
@@ -1364,7 +1380,7 @@ func _siege_can_target_player(i: int) -> bool:
 	if team[i] == siege_attacker or utype[i] == UnitType.ARCHER or sortie:
 		return true
 	if zp == SiegeMap.Zone.OUT:
-		return siege.gate_broken and player.global_position.x > SiegeMap.WALL_X0 - 14.0
+		return false
 	if zp == SiegeMap.Zone.LADDER:
 		return player.global_position.y > siege.wall_top() - 2.6
 	return true
@@ -1435,7 +1451,7 @@ func spawn_siege(attacker: int, n_att := 400, n_def := 200) -> void:
 	var ladders: Array = SiegeMap.LADDER_Z
 	# ---- 攻方 ----
 	var n_sq := int(ceil(float(n_att) / squad_size))
-	var n_arc := roundi(n_sq * 0.25)
+	var n_arc := roundi(n_sq * 0.20)
 	var n_cav := roundi(n_sq * 0.10)
 	var n_ram := 2
 	var n_lad := n_sq - n_arc - n_cav - n_ram
@@ -1450,7 +1466,7 @@ func spawn_siege(attacker: int, n_att := 400, n_def := 200) -> void:
 		var row := j / 2
 		var lz: float = ladders[lk]
 		plan.append([UnitType.INFANTRY, Vector3(-24.0 - row * 5.5, 0, lz + (col - 0.5) * 7.5), Role.NORMAL, lk, Order.HOLD, SiegeMap.Zone.OUT])
-	var arc_z := [-56.0, -47.0, -40.0, -22.0, -6.0, 6.0, 29.0, 37.0, 45.0, 53.0]
+	var arc_z := [-47.0, -40.0, -22.0, -6.0, 6.0, 29.0, 37.0, 45.0, -56.0, 53.0]
 	for k in n_arc:
 		var az: float = arc_z[k % arc_z.size()] + (k / arc_z.size()) * 3.0
 		plan.append([UnitType.ARCHER, Vector3(-19.0 - (k / arc_z.size()) * 4.0, 0, az), Role.NORMAL, -1, Order.HOLD, SiegeMap.Zone.OUT])
@@ -1469,27 +1485,27 @@ func spawn_siege(attacker: int, n_att := 400, n_def := 200) -> void:
 			_add_soldier(attacker, sq, m)
 	# ---- 守方 ----
 	n_sq = int(ceil(float(n_def) / squad_size))
-	n_arc = roundi(n_sq * 0.3)
+	n_arc = roundi(n_sq * 0.35)
 	var n_inf := n_sq - n_arc
 	remaining = n_def
 	plan.clear()
 	var wall_x := SiegeMap.WALK_X0 + 0.7
-	var d_arc_z := [-44.0, -22.0, -6.0, 6.0, 30.0, 42.0, -52.0, 52.0]
+	var d_arc_z := [-38.0, -22.0, -7.0, 7.0, 26.0, 34.0, -48.0, 46.0]
 	for k in n_arc:
 		plan.append([UnitType.ARCHER, Vector3(wall_x, 0, d_arc_z[k % d_arc_z.size()]), Role.WALLGUARD, -1, SiegeMap.Zone.WALL])
 	var placed := 0
 	for lz in ladders:
 		for s in [-1.0, 1.0]:
 			if placed < n_inf:
-				plan.append([UnitType.INFANTRY, Vector3(wall_x + 0.4, 0, lz + s * 3.6), Role.WALLGUARD, -1, SiegeMap.Zone.WALL])
+				plan.append([UnitType.SWORDSMAN, Vector3(wall_x + 0.4, 0, lz + s * 3.6), Role.WALLGUARD, -1, SiegeMap.Zone.WALL])
 				placed += 1
 	for s in [-1.0, 1.0]:
 		if placed < n_inf:
-			plan.append([UnitType.INFANTRY, Vector3(16.5, 0, s * 3.4), Role.GATE, -1, SiegeMap.Zone.IN])
+			plan.append([UnitType.SWORDSMAN, Vector3(16.5, 0, s * 3.4), Role.GATE, -1, SiegeMap.Zone.IN])
 			placed += 1
 	var r_i := 0
 	while placed < n_inf:
-		plan.append([UnitType.INFANTRY, Vector3(27.0 + (r_i / 3) * 6.0, 0, -14.0 + (r_i % 3) * 14.0), Role.RESERVE, -1, SiegeMap.Zone.IN])
+		plan.append([UnitType.SWORDSMAN, Vector3(27.0 + (r_i / 3) * 6.0, 0, -14.0 + (r_i % 3) * 14.0), Role.RESERVE, -1, SiegeMap.Zone.IN])
 		placed += 1
 		r_i += 1
 	for e in plan:
@@ -1534,8 +1550,18 @@ func _on_gate_broken() -> void:
 				squad_role[s] = Role.NORMAL
 				squad_order[s] = Order.CHARGE
 				squad_ladder[s] = -1
-		elif squad_role[s] == Role.GATE or squad_role[s] == Role.RESERVE:
-			squad_order[s] = Order.CHARGE
+	# 守方：城門守衛和還沒派上牆的預備隊在門洞後面列陣堵門（不出城）
+	var gate_slots := [Vector2(15.5, -3.6), Vector2(15.5, 3.6), Vector2(19.0, -6.5), Vector2(19.0, 0.0), Vector2(19.0, 6.5), Vector2(22.5, -3.6), Vector2(22.5, 3.6)]
+	var g := 0
+	for s in squad_count:
+		if squad_team[s] != siege_attacker and squad_alive[s] > 0 and squad_order[s] == Order.HOLD \
+				and (squad_role[s] == Role.GATE or squad_role[s] == Role.RESERVE):
+			var gs: Vector2 = gate_slots[mini(g, gate_slots.size() - 1)]
+			squad_role[s] = Role.GATE
+			squad_zone[s] = SiegeMap.Zone.IN
+			squad_anchor[s] = Vector3(gs.x, 0, gs.y)
+			squad_facing[s] = Vector3(-1, 0, 0)
+			g += 1
 
 
 ## 雙方指揮官（攻城戰版）
@@ -1560,7 +1586,7 @@ func _siege_army_tick(delta: float) -> void:
 	for i in count:
 		if state[i] == State.DEAD or team[i] != att:
 			continue
-		if utype[i] != UnitType.ARCHER:
+		if utype[i] == UnitType.INFANTRY or utype[i] == UnitType.SWORDSMAN:
 			att_melee += 1
 		if lvl[i] != 0:
 			var lk := siege.nearest_ladder(pos[i].z)
@@ -1582,7 +1608,7 @@ func _siege_army_tick(delta: float) -> void:
 			if squad_team[s] == att and squad_order[s] != Order.CHARGE:
 				squad_order[s] = Order.CHARGE
 	# 攻方快打光了：守方出城追擊
-	if not sortie and siege_started and alive_count[att] <= maxi(12, int(alive_count[dfd] * 0.3)):
+	if not sortie and siege_started and alive_count[att] <= maxi(12, alive_count[dfd]):
 		sortie = true
 		siege_event.emit("守軍出城追擊！")
 		for s in squad_count:
@@ -1672,7 +1698,7 @@ func _ladder_top_blocked(i: int, p: Vector3) -> bool:
 		if team[j] != team[i] and state[j] != State.DEAD and lvl[j] == 1:
 			var dx := pos[j].x - ex
 			var dz := pos[j].z - p.z
-			if dx * dx + dz * dz < 0.95 * 0.95 and absf(pos[j].y - top) < 0.5:
+			if dx * dx + dz * dz < 1.3 * 1.3 and absf(pos[j].y - top) < 0.5:
 				return true
 	return false
 
