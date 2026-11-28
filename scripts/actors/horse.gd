@@ -7,8 +7,8 @@ extends CharacterBody3D
 ## - 急轉彎（目標方向與目前朝向差太多）會自動減速
 ## - 撞牆會掉速；穿過人群會依人數減速（由戰場管理器提供「周圍士兵」查詢）
 
-@export var trot_speed := 7.5
-@export var gallop_speed := 15.0
+@export var trot_speed := 8.4
+@export var gallop_speed := 16.8
 @export var accel := 5.0
 @export var brake := 9.0
 @export var turn_rate_slow := 2.8      # 低速時每秒可轉的弧度
@@ -17,7 +17,7 @@ extends CharacterBody3D
 @export var crowd_slowdown := 0.12     # 每個擋路士兵造成的減速比例
 @export var gravity := 25.0
 # 「跟步行一樣」的操作（騎手用 set_drive_look）：馬頭轉向滑鼠方向，W 前進、S 後退
-@export var back_speed := 2.6          # 倒退（勒馬後退）的最高速度
+@export var back_speed := 2.9          # 倒退（勒馬後退）的最高速度
 @export var side_speed := 2.0          # 低速時 A/D 的側步速度（馬只能慢慢橫移）
 @export var side_max_speed := 3.0      # 前進速度超過這個值就不能側步，A/D 改成讓馬頭偏一點
 @export var steer_bias_deg := 35.0     # 前進中按 A/D，馬頭相對滑鼠方向偏幾度

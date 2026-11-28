@@ -17,8 +17,8 @@ signal weapon_changed(weapon_name: String)
 enum AttackPhase { NONE, WINDUP, SWING, RECOVER }
 ## 武器數值全部在 WeaponDefs（scripts/combat/weapon_defs.gd），這裡只放跟武器無關的手感數值
 
-@export var walk_speed := 4.4
-@export var run_speed := 7.6
+@export var walk_speed := 5.0
+@export var run_speed := 8.5
 @export var gravity := 25.0
 @export var max_hp := 250.0
 @export var mount_range := 3.0
